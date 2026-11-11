@@ -1,0 +1,12 @@
+{
+    "id": "@_bundleId@",
+    "name": "@_name@",
+    "display_name": "@_displayName@",
+    "version": "@_version@",
+    "description": "@_description@",
+    "urls": {
+        "repository": "@_website@",
+        "website": "@_website@",
+        "support": "@_website@/issues"
+    }
+}

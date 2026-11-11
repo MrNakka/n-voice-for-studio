@@ -38,8 +38,8 @@
     },
     "name": "n-voice-for-studio",
     "displayName": "N Voice for Studio",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "author": "N Voice",
-    "website": "https://example.com",
+    "website": "https://github.com/MrNakka/n-voice-for-studio",
     "email": "me@example.com"
 }

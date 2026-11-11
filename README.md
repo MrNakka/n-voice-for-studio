@@ -70,26 +70,55 @@ cmake --build --preset windows-x64
 
 ### 3. OBSへのインストール
 
+**対応OBS：33.0以降。** OBS 33で導入された新しいプラグイン配置（`.dll` を `data` と同じ階層に置く方式）に対応しています。OBS 32以前では読み込まれません。
+
 ```powershell
 cmake --install build_x64 --prefix release --config RelWithDebInfo
+.\tools\install-windows.ps1
 ```
 
-`release\n-voice-for-studio` フォルダーができるので、フォルダーごと次の場所へコピーします。
+インストール先（OBS 33の新方式）：
 
 ```text
 C:\ProgramData\obs-studio\plugins\n-voice-for-studio\
-├── bin\64bit\n-voice-for-studio.dll
-└── data\locale\ja-JP.ini, en-US.ini
+├── n-voice-for-studio.dll
+├── n-voice-for-studio.pdb
+└── data\
+    ├── manifest.json        プラグインマネージャー用（表示名・ID・バージョン）
+    └── locale\ja-JP.ini, en-US.ini
 ```
+
+旧方式の `bin\64bit\` に置くと、プラグインマネージャーで「旧方式（Legacy）」と表示され、OBS 34以降は読み込まれなくなります。
 
 ### 4. 動作確認
 
 1. OBSを起動し、メニュー「ドック」→「N Voice for Studio」でダッシュボードを表示
 2. マイクのソースを右クリック →「フィルタ」→ 音声フィルタの「＋」→「N Voice for Studio」を追加
 3. ダッシュボードのステータスが **ACTIVE** になり、入力レベルが動けばOK
-4. テーマを切り替えてOBSを再起動し、テーマが保持されていることを確認
+4. 「ツール」→「プラグインマネージャー」で、N Voice for Studio が旧方式の表示なしで、バージョン付きで並んでいればOK
 
 設定ファイルの場所：`%APPDATA%\obs-studio\plugin_config\n-voice-for-studio\settings.json`
+
+## 更新・リリースの流れ
+
+### プラグインを更新する（使う側）
+
+GitHubのReleasesかActionsからzipをダウンロードし、OBSを閉じてから実行します。
+
+```powershell
+.\tools\install-windows.ps1 -Source $HOME\Downloads\n-voice-for-studio-<版>-windows-x64.zip
+```
+
+スクリプトはプラグインフォルダーを丸ごと入れ替えます。そのため、古い版のファイルや旧方式の `bin\64bit` が残りません。設定（`%APPDATA%` 側）は消えません。
+
+手動でやる場合は、zipの中の `n-voice-for-studio` フォルダーで `C:\ProgramData\obs-studio\plugins\n-voice-for-studio` を置き換えてください。
+
+### 新しい版を出す（作る側）
+
+1. `buildspec.json` の `version` を上げる（例：`0.1.1` → `0.2.0`）。プラグインマネージャーに出るバージョンも、これだけで変わります。
+2. コミットして `main` にpushする。
+3. 同じ番号のタグをpushする：`git tag 0.2.0` → `git push origin 0.2.0`
+4. GitHub ActionsがWindows版zipを添付したReleaseの下書きを作るので、内容を確認して公開する。
 
 ## GitHubでの自動ビルド（GitHub Actions）
 

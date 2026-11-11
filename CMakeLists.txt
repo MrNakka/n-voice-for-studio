@@ -66,3 +66,13 @@ target_sources(
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
+
+# Plugin manifest read by the OBS 33+ Plugin Manager (display name, id, version).
+# Every value comes from buildspec.json, so bumping its version updates the manifest.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/buildspec.json" _buildspec_json)
+string(JSON _displayName GET "${_buildspec_json}" displayName)
+set(_description "AI audio engine for OBS: voice cleanup, leveling and ducking for streamers")
+configure_file(cmake/common/manifest.json.in "${CMAKE_CURRENT_BINARY_DIR}/manifest.json" @ONLY)
+if(OS_WINDOWS)
+  target_add_resource(${CMAKE_PROJECT_NAME} "${CMAKE_CURRENT_BINARY_DIR}/manifest.json")
+endif()

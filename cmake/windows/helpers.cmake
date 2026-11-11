@@ -22,12 +22,14 @@ function(set_target_properties_plugin target)
 
   set_target_properties(${target} PROPERTIES VERSION 0 SOVERSION ${PLUGIN_VERSION})
 
-  install(TARGETS ${target} RUNTIME DESTINATION "${target}/bin/64bit" LIBRARY DESTINATION "${target}/bin/64bit")
+  # OBS Studio 33+ plugin layout: <plugin>/<plugin>.dll next to <plugin>/data.
+  # The old <plugin>/bin/64bit layout is flagged "Legacy" and stops loading in OBS 34.
+  install(TARGETS ${target} RUNTIME DESTINATION "${target}" LIBRARY DESTINATION "${target}")
 
   install(
     FILES "$<TARGET_PDB_FILE:${target}>"
     CONFIGURATIONS RelWithDebInfo Debug Release
-    DESTINATION "${target}/bin/64bit"
+    DESTINATION "${target}"
     OPTIONAL
   )
 
