@@ -1,10 +1,13 @@
 #include "dashboard_dock.hpp"
 
+#include "feature_page.hpp"
 #include "feature_row.hpp"
 #include "level_meter_widget.hpp"
 #include "theme.hpp"
 #include "toggle_switch.hpp"
+#include "../config/presets.hpp"
 #include "../obs/filter_registry.hpp"
+#include "../obs/filter_settings.hpp"
 
 #include <obs-module.h>
 #include <obs.hpp>
@@ -18,6 +21,8 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QSignalBlocker>
+#include <QStackedWidget>
 #include <QStyle>
 #include <QVBoxLayout>
 
@@ -86,6 +91,7 @@ void DashboardDock::shutdown()
 {
 	timer_.stop();
 	selected_.reset();
+	selectedFilter_ = nullptr;
 }
 
 QSize DashboardDock::sizeHint() const
@@ -108,12 +114,32 @@ void DashboardDock::buildUi()
 	scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	rootLayout->addWidget(scroll);
 
-	auto *content = new QWidget(scroll);
-	content->setObjectName(QStringLiteral("NVoiceContent"));
-	content->setMinimumWidth(320); // stays operable in narrow docks
-	scroll->setWidget(content);
+	stack_ = new QStackedWidget(scroll);
+	stack_->setObjectName(QStringLiteral("NVoiceContent"));
+	stack_->setMinimumWidth(320); // stays operable in narrow docks
+	scroll->setWidget(stack_);
 
-	auto *layout = new QVBoxLayout(content);
+	stack_->addWidget(buildDashboard());
+	buildPages();
+
+	// Only the visible page decides the scroll height.
+	connect(stack_, &QStackedWidget::currentChanged, this, [this](int index) {
+		for (int i = 0; i < stack_->count(); ++i) {
+			const auto policy = i == index ? QSizePolicy::Preferred : QSizePolicy::Ignored;
+			stack_->widget(i)->setSizePolicy(policy, policy);
+		}
+		stack_->adjustSize();
+	});
+	for (int i = 1; i < stack_->count(); ++i)
+		stack_->widget(i)->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+	showDashboard();
+}
+
+QWidget *DashboardDock::buildDashboard()
+{
+	auto *page = new QWidget(stack_);
+	page->setObjectName(QStringLiteral("NVoiceContent"));
+	auto *layout = new QVBoxLayout(page);
 	layout->setContentsMargins(16, 14, 16, 16);
 	layout->setSpacing(14);
 
@@ -122,6 +148,63 @@ void DashboardDock::buildUi()
 	layout->addWidget(buildMicCard());
 	layout->addWidget(buildFeatureList());
 	layout->addStretch(1);
+	return page;
+}
+
+void DashboardDock::buildPages()
+{
+	namespace p = engine::params;
+	auto pageHost = [this](FeaturePage *page) {
+		auto *host = new QWidget(stack_);
+		host->setObjectName(QStringLiteral("NVoiceContent"));
+		auto *layout = new QVBoxLayout(host);
+		layout->setContentsMargins(16, 14, 16, 16);
+		layout->addWidget(page);
+		stack_->addWidget(host);
+		connect(page, &FeaturePage::backRequested, this, &DashboardDock::showDashboard);
+		connect(page, &FeaturePage::enabledToggled, this, &DashboardDock::onFeatureToggled);
+		connect(page, &FeaturePage::valueChanged, this, &DashboardDock::onParamChanged);
+		connect(page, &FeaturePage::resetRequested, this, &DashboardDock::resetFeature);
+	};
+
+	FeaturePage::Spec comp;
+	comp.id = QStringLiteral("compressor");
+	comp.title = T("NVoice.Feature.Compressor.Title");
+	comp.description = T("NVoice.Compressor.Description");
+	comp.meterLabel = T("NVoice.Compressor.Meter");
+	comp.meterMinDb = -24.0f;
+	comp.meterMaxDb = 0.0f;
+	comp.basic = {
+		{&p::kCompStrength, T("NVoice.Param.Strength"), T("NVoice.Param.Strength.Help"), 0, 1.0},
+		{&p::kCompMakeup, T("NVoice.Param.Makeup"), T("NVoice.Param.Makeup.Help"), 1, 0.5},
+	};
+	comp.advanced = {
+		{&p::kCompThreshold, T("NVoice.Param.Threshold"), T("NVoice.Param.Threshold.Help"), 1, 0.5},
+		{&p::kCompRatio, T("NVoice.Param.Ratio"), T("NVoice.Param.Ratio.Help"), 1, 0.1},
+		{&p::kCompAttack, T("NVoice.Param.Attack"), T("NVoice.Param.Attack.Help"), 1, 0.5},
+		{&p::kCompRelease, T("NVoice.Param.Release"), T("NVoice.Param.Release.Help"), 0, 5.0},
+	};
+	compressorPage_ = new FeaturePage(comp, stack_);
+	pageHost(compressorPage_);
+
+	FeaturePage::Spec lev;
+	lev.id = QStringLiteral("auto_leveler");
+	lev.title = T("NVoice.Feature.AutoLeveler.Title");
+	lev.description = T("NVoice.AutoLeveler.Description");
+	lev.meterLabel = T("NVoice.AutoLeveler.Meter");
+	lev.meterMinDb = -12.0f;
+	lev.meterMaxDb = 18.0f;
+	lev.basic = {
+		{&p::kLevelerTarget, T("NVoice.Param.Target"), T("NVoice.Param.Target.Help"), 1, 0.5},
+		{&p::kLevelerMaxGain, T("NVoice.Param.MaxGain"), T("NVoice.Param.MaxGain.Help"), 1, 0.5},
+		{&p::kLevelerSpeed, T("NVoice.Param.Speed"), T("NVoice.Param.Speed.Help"), 1, 0.1},
+	};
+	lev.advanced = {
+		{&p::kLevelerMaxCut, T("NVoice.Param.MaxCut"), T("NVoice.Param.MaxCut.Help"), 1, 0.5},
+		{&p::kLevelerGate, T("NVoice.Param.Gate"), T("NVoice.Param.Gate.Help"), 1, 0.5},
+	};
+	levelerPage_ = new FeaturePage(lev, stack_);
+	pageHost(levelerPage_);
 }
 
 QWidget *DashboardDock::buildHeader()
@@ -227,7 +310,23 @@ QWidget *DashboardDock::buildPresets()
 	connect(presetGroup_, &QButtonGroup::idClicked, this, [this](int id) {
 		settings_.profile = static_cast<config::Profile>(id);
 		persist();
+		applyPreset(settings_.profile);
 	});
+
+	presetNotice_ = new QFrame(section);
+	presetNotice_->setObjectName(QStringLiteral("NVoiceNotice"));
+	auto *noticeLayout = new QHBoxLayout(presetNotice_);
+	noticeLayout->setContentsMargins(12, 6, 6, 6);
+	presetNoticeText_ = new QLabel(presetNotice_);
+	presetNoticeText_->setWordWrap(true);
+	noticeLayout->addWidget(presetNoticeText_, 1);
+	undoButton_ = new QPushButton(T("NVoice.Preset.Undo"), presetNotice_);
+	undoButton_->setObjectName(QStringLiteral("NVoiceSecondary"));
+	undoButton_->setCursor(Qt::PointingHandCursor);
+	connect(undoButton_, &QPushButton::clicked, this, &DashboardDock::undoPreset);
+	noticeLayout->addWidget(undoButton_);
+	presetNotice_->setVisible(false);
+	layout->addWidget(presetNotice_);
 	return section;
 }
 
@@ -264,6 +363,7 @@ QWidget *DashboardDock::buildMicCard()
 		selectedId_ = sourceCombo_->itemData(index).toULongLong();
 		selected_.reset();
 		meter_->clear();
+		outputMeter_->clear();
 		refreshSources();
 	});
 
@@ -299,6 +399,18 @@ QWidget *DashboardDock::buildMicCard()
 	peakRow->addStretch(1);
 	peakRow->addWidget(peakValue_);
 	meterLayout->addLayout(peakRow);
+
+	auto *outputRow = new QHBoxLayout();
+	auto *outputLabel = new QLabel(T("NVoice.Output.Level"), meterArea_);
+	outputValue_ = new QLabel(formatDb(-120.0f), meterArea_);
+	outputValue_->setObjectName(QStringLiteral("NVoiceOutputValue"));
+	outputRow->addWidget(outputLabel);
+	outputRow->addStretch(1);
+	outputRow->addWidget(outputValue_);
+	meterLayout->addSpacing(4);
+	meterLayout->addLayout(outputRow);
+	outputMeter_ = new LevelMeterWidget(meterArea_);
+	meterLayout->addWidget(outputMeter_);
 	cardLayout->addWidget(meterArea_);
 
 	noSourceHint_ = new QLabel(T("NVoice.Input.NoSource"), card);
@@ -318,15 +430,14 @@ QWidget *DashboardDock::buildFeatureList()
 	layout->setSpacing(8);
 	layout->addWidget(sectionTitle(QStringLiteral("☰"), T("NVoice.Section.Adjust"), section));
 
-	// Phase 1: every DSP feature is still Coming Soon. Flip `available` to
-	// true as each feature lands (compressor / auto leveler in Phase 2, ...).
+	// Features still marked `available = false` show as Coming Soon.
 	const FeatureRow::Spec adjustSpecs[] = {
 		{"noise_suppression", QStringLiteral("≋"), T("NVoice.Feature.NoiseSuppression.Title"),
 		 T("NVoice.Feature.NoiseSuppression.Desc"), false, true},
 		{"compressor", QStringLiteral("⇅"), T("NVoice.Feature.Compressor.Title"),
-		 T("NVoice.Feature.Compressor.Desc"), false, true},
+		 T("NVoice.Feature.Compressor.Desc"), true, true},
 		{"auto_leveler", QStringLiteral("◢"), T("NVoice.Feature.AutoLeveler.Title"),
-		 T("NVoice.Feature.AutoLeveler.Desc"), false, true},
+		 T("NVoice.Feature.AutoLeveler.Desc"), true, true},
 		{"exciter", QStringLiteral("◆"), T("NVoice.Feature.Exciter.Title"), T("NVoice.Feature.Exciter.Desc"),
 		 false, true},
 		{"ducking", QStringLiteral("♪"), T("NVoice.Feature.Ducking.Title"), T("NVoice.Feature.Ducking.Desc"),
@@ -372,8 +483,11 @@ QWidget *DashboardDock::buildFeatureList()
 			if (id == QLatin1String("waveform")) {
 				settings_.waveformVisible = on;
 				persist();
+			} else {
+				onFeatureToggled(id, on);
 			}
 		});
+		connect(row, &FeatureRow::openRequested, this, &DashboardDock::openPage);
 	}
 	return section;
 }
@@ -405,6 +519,9 @@ void DashboardDock::applyTheme(config::Theme theme)
 	const Palette &p = paletteFor(theme);
 	setStyleSheet(styleSheetFor(theme));
 	meter_->setColors(p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
+	outputMeter_->setColors(p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
+	for (auto *page : {compressorPage_, levelerPage_})
+		page->applyPalette(p.accent, p.toggleOff, p.meterTrack);
 	for (auto *row : rows_) {
 		if (row->toggle())
 			row->toggle()->setColors(p.accent, p.toggleOff, QColor(Qt::white));
@@ -432,6 +549,7 @@ void DashboardDock::showNoSource()
 {
 	selectedId_ = 0;
 	selected_.reset();
+	selectedFilter_ = nullptr;
 	selectedEnabled_ = false;
 	sourceCombo_->setVisible(false);
 	sourceLabel_->clear();
@@ -439,6 +557,14 @@ void DashboardDock::showNoSource()
 	noSourceHint_->setVisible(true);
 	inputChip_->setVisible(false);
 	meter_->clear();
+	outputMeter_->clear();
+	presetNotice_->setVisible(false);
+	for (auto *row : rows_)
+		row->setInteractive(false);
+	for (auto *page : {compressorPage_, levelerPage_})
+		page->setControlsEnabled(false);
+	if (stack_->currentIndex() != 0)
+		showDashboard();
 }
 
 void DashboardDock::refreshSources()
@@ -448,6 +574,7 @@ void DashboardDock::refreshSources()
 		QString name;
 		bool enabled;
 		std::shared_ptr<obs::FilterShared> shared;
+		OBSWeakSource weak;
 	};
 	std::vector<Item> items;
 
@@ -459,7 +586,7 @@ void DashboardDock::refreshSources()
 			continue;
 		obs_source_t *parent = obs_filter_get_parent(filter);
 		const QString name = parent ? QString::fromUtf8(obs_source_get_name(parent)) : T("NVoice.Unassigned");
-		items.push_back({handle.id, name, obs_source_enabled(filter), handle.shared});
+		items.push_back({handle.id, name, obs_source_enabled(filter), handle.shared, handle.weakFilter});
 	}
 
 	bool anyEnabled = false;
@@ -489,10 +616,14 @@ void DashboardDock::refreshSources()
 	if (!chosen)
 		chosen = &items.front();
 
-	if (chosen->id != selectedId_)
+	const bool selectionChanged = chosen->id != selectedId_ || !selected_;
+	if (selectionChanged) {
 		meter_->clear();
+		outputMeter_->clear();
+	}
 	selectedId_ = chosen->id;
 	selected_ = chosen->shared;
+	selectedFilter_ = chosen->weak;
 	selectedEnabled_ = chosen->enabled;
 
 	// Rebuild the picker only when the list actually changed.
@@ -517,6 +648,12 @@ void DashboardDock::refreshSources()
 	meterArea_->setVisible(true);
 	noSourceHint_->setVisible(false);
 	inputChip_->setVisible(true);
+	for (auto *row : rows_)
+		row->setInteractive(true);
+	for (auto *page : {compressorPage_, levelerPage_})
+		page->setControlsEnabled(true);
+	if (selectionChanged)
+		syncFromFilter();
 }
 
 void DashboardDock::tick()
@@ -528,10 +665,21 @@ void DashboardDock::tick()
 	if (!selected_)
 		return;
 
-	const auto reading = selected_->engine.inputMeter().read();
+	auto &chain = selected_->chain;
+	const auto reading = chain.engine.inputMeter().read();
 	meter_->setLevels(reading.rmsDb, reading.peakDb);
 	levelValue_->setText(formatDb(reading.rmsDb));
 	peakValue_->setText(formatDb(meter_->heldPeakDb()));
+
+	const auto output = chain.engine.outputMeter().read();
+	outputMeter_->setLevels(output.rmsDb, output.peakDb);
+	outputValue_->setText(formatDb(output.rmsDb));
+
+	// Only the visible page reads its meter (reading resets the peak hold).
+	if (stack_->currentWidget()->isAncestorOf(compressorPage_))
+		compressorPage_->setMeter(chain.compressor.enabled() ? chain.compressor.readGainReductionDb() : 0.0f);
+	else if (stack_->currentWidget()->isAncestorOf(levelerPage_))
+		levelerPage_->setMeter(chain.leveler.enabled() ? chain.leveler.currentGainDb() : 0.0f);
 
 	const qint64 now = clock_.elapsed();
 	if (reading.rmsDb > kSignalThresholdDb)
@@ -546,6 +694,176 @@ void DashboardDock::tick()
 		inputChip_->setProperty("state", state);
 		repolish(inputChip_);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Filter settings
+// ---------------------------------------------------------------------------
+
+bool DashboardDock::writeFilter(const std::function<void(obs_data_t *)> &fill)
+{
+	OBSSource filter = OBSGetStrongRef(selectedFilter_);
+	if (!filter)
+		return false;
+	OBSDataAutoRelease changes = obs_data_create();
+	fill(changes);
+	obs_source_update(filter, changes); // merges and calls the filter's update()
+	return true;
+}
+
+void DashboardDock::syncFromFilter()
+{
+	OBSSource filter = OBSGetStrongRef(selectedFilter_);
+	if (!filter)
+		return;
+	OBSDataAutoRelease settings = obs_source_get_settings(filter);
+
+	const bool compOn = obs_data_get_bool(settings, obs::kCompressorEnabled);
+	const bool levOn = obs_data_get_bool(settings, obs::kLevelerEnabled);
+	for (auto *row : rows_) {
+		if (row->featureId() == QLatin1String("compressor"))
+			row->setChecked(compOn);
+		else if (row->featureId() == QLatin1String("auto_leveler"))
+			row->setChecked(levOn);
+	}
+	compressorPage_->setEnabledState(compOn);
+	levelerPage_->setEnabledState(levOn);
+
+	for (auto *page : {compressorPage_, levelerPage_}) {
+		for (auto *control : page->controls())
+			control->setValue(obs::getParam(settings, control->param()));
+	}
+}
+
+void DashboardDock::onFeatureToggled(const QString &featureId, bool enabled)
+{
+	const char *key = featureId == QLatin1String("compressor") ? obs::kCompressorEnabled : obs::kLevelerEnabled;
+	writeFilter([&](obs_data_t *d) { obs_data_set_bool(d, key, enabled); });
+	syncFromFilter(); // keep the row and the page in step
+}
+
+void DashboardDock::onParamChanged(const QString &paramId, double value)
+{
+	const auto id = paramId.toStdString();
+	const auto *spec = engine::findParameter(id);
+	if (!spec)
+		return;
+
+	writeFilter([&](obs_data_t *d) {
+		obs::setParam(d, *spec, value);
+		// The beginner "strength" drives threshold and ratio.
+		if (spec == &engine::params::kCompStrength) {
+			const auto tr = engine::compressorFromStrength(static_cast<float>(value));
+			obs::setParam(d, engine::params::kCompThreshold, tr.threshold);
+			obs::setParam(d, engine::params::kCompRatio, tr.ratio);
+		}
+	});
+
+	if (spec == &engine::params::kCompStrength) {
+		const auto tr = engine::compressorFromStrength(static_cast<float>(value));
+		compressorPage_->setValue(QString::fromUtf8(engine::params::kCompThreshold.id.data()), tr.threshold);
+		compressorPage_->setValue(QString::fromUtf8(engine::params::kCompRatio.id.data()), tr.ratio);
+	}
+}
+
+void DashboardDock::resetFeature(const QString &featureId)
+{
+	writeFilter([&](obs_data_t *d) {
+		if (featureId == QLatin1String("compressor")) {
+			for (const auto *spec : obs::kCompressorParams)
+				obs::setParam(d, *spec, spec->defaultValue);
+		} else {
+			for (const auto *spec : obs::kLevelerParams)
+				obs::setParam(d, *spec, spec->defaultValue);
+		}
+	});
+	syncFromFilter();
+}
+
+void DashboardDock::applyPreset(config::Profile profile)
+{
+	OBSSource filter = OBSGetStrongRef(selectedFilter_);
+	if (!filter)
+		return; // selection is saved; nothing to apply yet
+
+	// Remember the current values so the preset can be undone (§4.9).
+	{
+		OBSDataAutoRelease current = obs_source_get_settings(filter);
+		OBSDataAutoRelease snapshot = obs_data_create();
+		obs_data_set_bool(snapshot, obs::kCompressorEnabled,
+				  obs_data_get_bool(current, obs::kCompressorEnabled));
+		obs_data_set_bool(snapshot, obs::kLevelerEnabled, obs_data_get_bool(current, obs::kLevelerEnabled));
+		for (const auto *spec : engine::params::kAll)
+			obs::setParam(snapshot, *spec, obs::getParam(current, *spec));
+		undoJson_ = obs_data_get_json(snapshot);
+		undoFilterId_ = selectedId_;
+	}
+
+	namespace p = engine::params;
+	const auto &v = config::presetFor(profile);
+	const auto tr = engine::compressorFromStrength(v.compStrength);
+	writeFilter([&](obs_data_t *d) {
+		obs_data_set_bool(d, obs::kCompressorEnabled, true);
+		obs_data_set_bool(d, obs::kLevelerEnabled, true);
+		obs::setParam(d, p::kCompStrength, v.compStrength);
+		obs::setParam(d, p::kCompThreshold, tr.threshold);
+		obs::setParam(d, p::kCompRatio, tr.ratio);
+		obs::setParam(d, p::kCompAttack, v.compAttackMs);
+		obs::setParam(d, p::kCompRelease, v.compReleaseMs);
+		obs::setParam(d, p::kCompMakeup, v.compMakeupDb);
+		obs::setParam(d, p::kLevelerTarget, v.levelerTargetDb);
+		obs::setParam(d, p::kLevelerMaxGain, v.levelerMaxGainDb);
+		obs::setParam(d, p::kLevelerMaxCut, v.levelerMaxCutDb);
+		obs::setParam(d, p::kLevelerSpeed, v.levelerSpeedSec);
+		obs::setParam(d, p::kLevelerGate, v.levelerGateDb);
+	});
+	syncFromFilter();
+
+	const QString name =
+		presetButtons_.value(static_cast<int>(profile))
+			? presetButtons_[static_cast<int>(profile)]->text().section(QStringLiteral("  "), 1)
+			: QString();
+	presetNoticeText_->setText(T("NVoice.Preset.Applied").arg(name));
+	undoButton_->setVisible(true);
+	presetNotice_->setVisible(true);
+}
+
+void DashboardDock::undoPreset()
+{
+	if (undoJson_.empty() || undoFilterId_ != selectedId_) {
+		presetNotice_->setVisible(false);
+		return;
+	}
+	const std::string json = undoJson_;
+	writeFilter([&](obs_data_t *d) {
+		OBSDataAutoRelease snapshot = obs_data_create_from_json(json.c_str());
+		obs_data_apply(d, snapshot);
+	});
+	undoJson_.clear();
+	syncFromFilter();
+	presetNoticeText_->setText(T("NVoice.Preset.Undone"));
+	undoButton_->setVisible(false);
+}
+
+// ---------------------------------------------------------------------------
+// Navigation
+// ---------------------------------------------------------------------------
+
+void DashboardDock::openPage(const QString &featureId)
+{
+	if (!selected_)
+		return;
+	syncFromFilter();
+	FeaturePage *page = featureId == QLatin1String("compressor") ? compressorPage_ : levelerPage_;
+	if (featureId == QLatin1String("compressor"))
+		selected_->chain.compressor.readGainReductionDb(); // start the meter fresh
+	stack_->setCurrentWidget(page->parentWidget());
+}
+
+void DashboardDock::showDashboard()
+{
+	stack_->setCurrentIndex(0);
+	syncFromFilter();
 }
 
 } // namespace nvoice::ui

@@ -49,16 +49,24 @@ target_sources(
     src/plugin-main.cpp
     src/config/app_settings.cpp
     src/config/app_settings.hpp
+    src/config/presets.cpp
+    src/config/presets.hpp
     src/obs/filter_registry.cpp
     src/obs/filter_registry.hpp
+    src/obs/filter_settings.cpp
+    src/obs/filter_settings.hpp
     src/obs/nvoice_filter.cpp
     src/obs/nvoice_filter.hpp
     src/ui/dashboard_dock.cpp
     src/ui/dashboard_dock.hpp
+    src/ui/feature_page.cpp
+    src/ui/feature_page.hpp
     src/ui/feature_row.cpp
     src/ui/feature_row.hpp
     src/ui/level_meter_widget.cpp
     src/ui/level_meter_widget.hpp
+    src/ui/param_control.cpp
+    src/ui/param_control.hpp
     src/ui/theme.cpp
     src/ui/theme.hpp
     src/ui/toggle_switch.cpp

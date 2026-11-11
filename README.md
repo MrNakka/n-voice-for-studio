@@ -2,25 +2,26 @@
 
 **AI Audio Engine for OBS** — Your Voice, Refined.
 
-配信者向けのOBS Studio音声処理プラグインです。要件は Project の「N Voice 要件定義書 v0.2」を参照してください。
+配信者向けのOBS Studio音声処理プラグインです。要件は Project の「N Voice 要件定義書」を参照してください。
 
-| ダーク | ライト |
+| ダッシュボード | 機能の詳細画面 |
 |---|---|
-| ![dark](docs/phase1-dashboard-dark.png) | ![light](docs/phase1-dashboard-light.png) |
+| ![dashboard](docs/phase2-dashboard.png) | ![compressor](docs/phase2-compressor.png) |
 
-## 現在の状態：Phase 1（プラグイン基盤）
+## 現在の状態：Phase 2（基本の音声処理）
 
 | 項目 | 状態 |
 |---|---|
-| OBSプラグインとしてのロード | ✅ |
-| 音声フィルター「N Voice for Studio」（パススルー＋入力/出力メーター） | ✅ |
-| ダッシュボード（OBSドック） | ✅ |
-| ダーク／ライトテーマ切替・再起動後も保持 | ✅ |
-| 配信スタイル（プリセット）選択の保存 | ✅（音声への反映はPhase 2） |
-| 入力レベル・ピーク表示（約30fps） | ✅ |
-| 未実装機能の「Coming Soon」表示 | ✅ |
-| 設定保存（JSON、バージョン・移行処理つき） | ✅ |
-| OBS非依存の音声エンジン＋単体テスト | ✅ |
+| OBSプラグインとしてのロード（OBS 33の新しい配置） | ✅ |
+| ダッシュボード（OBSドック）、ダーク／ライトテーマ | ✅ |
+| 入力レベル・ピーク・処理後の音量表示（約30fps） | ✅ |
+| 声の音量を自動調整（オートレベラー） | ✅ |
+| 声の強弱を整える（コンプレッサー） | ✅ |
+| 機能の詳細画面（スライダー＋数値入力、詳細設定、リセット、動作メーター） | ✅ |
+| 配信スタイル（プリセット）の適用と「元に戻す」 | ✅ |
+| 設定の保存（UIは設定ファイル、音声設定はフィルターごとにOBSが保存） | ✅ |
+| 波形表示 | 未着手（Coming Soon） |
+| AIノイズ除去、声に厚みを加える、声を優先する（ダッキング）、音量バランスチェック | 今後のフェーズ（Coming Soon） |
 
 ## ディレクトリ構成
 
@@ -32,6 +33,9 @@ n_voice/
 ├── engine/                 OBS非依存の音声エンジン（libobs・Qtを使わない）
 │   ├── include/nvoice/engine/
 │   │   ├── audio_engine.hpp      DSPチェーン＋入出力メーター
+│   │   ├── voice_chain.hpp       処理の順番（オートレベラー → コンプレッサー）
+│   │   ├── auto_leveler.hpp      声の音量を自動調整
+│   │   ├── compressor.hpp        声の強弱を整える
 │   │   ├── level_meter.hpp       リアルタイム安全なレベルメーター
 │   │   ├── processor.hpp         DSPステージ共通インターフェース
 │   │   ├── parameters.hpp        全パラメーターの単位・範囲・初期値（一元管理）
@@ -149,7 +153,10 @@ ctest --test-dir build_engine -C Debug
 - **音声スレッドの安全性**：`filter_audio` 内では、メモリ確保・ロック・ログ出力を一切行いません。メーター値は atomic でUIスレッドへ渡します。
 - **UIとフィルターの寿命**：エンジン状態を `shared_ptr` で共有し、フィルターを削除してもUIが解放済みメモリを読まない構造にしています。
 - **Coming Soon**：`src/ui/dashboard_dock.cpp` の `FeatureRow::Spec` で `available` を `true` にすると、その機能が通常表示（ON/OFFトグルあり）に切り替わります。
-- **パラメーター**：`engine/include/nvoice/engine/parameters.hpp` で一元管理しています。現在の範囲と初期値は暫定値で、Phase 2で調整します。
+- **パラメーター**：`engine/include/nvoice/engine/parameters.hpp` で、単位・範囲・初期値を一元管理しています。初心者向けの「抑える強さ」は、Threshold と Ratio をまとめて動かします（`compressorFromStrength`）。
+- **処理の順番**：オートレベラー → コンプレッサー。先に話し声の音量をそろえ、残った急な大声をコンプレッサーで抑えます。
+- **無音時の環境音を持ち上げない**：オートレベラーは、速い検出（50ms）で無音判定し、話していない間と話し終わりの減衰中は補正量を変えません。
+- **プリセット**：`src/config/presets.cpp`。値は出発点です。適用前の設定は「元に戻す」で復元できます。
 
 ## ライセンス
 

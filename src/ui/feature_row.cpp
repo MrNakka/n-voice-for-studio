@@ -7,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
 namespace nvoice::ui {
@@ -63,8 +64,19 @@ void FeatureRow::setSubtitle(const QString &text)
 
 void FeatureRow::setChecked(bool checked)
 {
-	if (toggle_)
+	if (toggle_) {
+		const QSignalBlocker blocker(toggle_);
 		toggle_->setChecked(checked);
+	}
+}
+
+void FeatureRow::setInteractive(bool interactive)
+{
+	interactive_ = interactive;
+	if (toggle_)
+		toggle_->setEnabled(interactive);
+	if (spec_.available)
+		setCursor(interactive ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 
 bool FeatureRow::isChecked() const
@@ -80,7 +92,7 @@ void FeatureRow::setLast(bool last)
 void FeatureRow::mouseReleaseEvent(QMouseEvent *event)
 {
 	// Coming Soon rows are inert: no toggling, no navigation.
-	if (spec_.available && event->button() == Qt::LeftButton)
+	if (spec_.available && interactive_ && event->button() == Qt::LeftButton)
 		emit openRequested(spec_.id);
 	QFrame::mouseReleaseEvent(event);
 }

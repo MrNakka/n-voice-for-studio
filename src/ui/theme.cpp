@@ -137,6 +137,39 @@ QPushButton#NVoicePreset:checked {
 #NVoiceChevron { color: @textMuted; font-size: 16px; }
 #NVoiceFeatureRow[comingSoon="true"] #NVoiceChevron { color: @border; }
 
+#NVoiceOutputValue { font-weight: 600; }
+#NVoiceMeterValue { font-weight: 600; }
+
+#NVoiceNotice {
+	background: @accentSoft; border: 1px solid @accent; border-radius: 8px;
+}
+QPushButton#NVoiceSecondary {
+	background: @surface; color: @text; border: 1px solid @border; border-radius: 6px;
+	padding: 4px 12px;
+}
+QPushButton#NVoiceSecondary:hover { border-color: @accent; }
+QPushButton#NVoiceBack {
+	background: transparent; color: @accent; border: none; padding: 4px 2px; font-weight: 600;
+}
+QToolButton#NVoiceDisclosure {
+	background: transparent; color: @text; border: none; font-weight: 600; padding: 2px 0;
+}
+#NVoiceParamLabel { color: @text; }
+QSlider#NVoiceSlider::groove:horizontal {
+	height: 4px; background: @surfaceAlt; border-radius: 2px;
+}
+QSlider#NVoiceSlider::sub-page:horizontal { background: @accent; border-radius: 2px; }
+QSlider#NVoiceSlider::handle:horizontal {
+	background: #FFFFFF; border: 2px solid @accent; width: 12px; height: 12px;
+	margin: -6px 0; border-radius: 8px;
+}
+QSlider#NVoiceSlider::handle:horizontal:disabled { border-color: @border; }
+QDoubleSpinBox#NVoiceSpin {
+	background: @surfaceAlt; color: @text; border: 1px solid @border; border-radius: 6px;
+	padding: 3px 8px; min-height: 22px;
+}
+QDoubleSpinBox#NVoiceSpin:focus { border-color: @accent; }
+
 #NVoiceRoot QScrollBar:vertical { background: transparent; width: 8px; }
 #NVoiceRoot QScrollBar::handle:vertical { background: @border; border-radius: 4px; min-height: 24px; }
 #NVoiceRoot QScrollBar::add-line, #NVoiceRoot QScrollBar::sub-line { height: 0; }

@@ -1,6 +1,7 @@
 #include "nvoice_filter.hpp"
 
 #include "filter_registry.hpp"
+#include "filter_settings.hpp"
 
 #include <obs-module.h>
 #include <plugin-support.h>
@@ -23,7 +24,7 @@ const char *filterGetName(void *)
 	return obs_module_text("NVoice.Filter.Name");
 }
 
-void *filterCreate(obs_data_t *, obs_source_t *source)
+void *filterCreate(obs_data_t *settings, obs_source_t *source)
 {
 	auto *instance = new FilterInstance();
 	instance->context = source;
@@ -37,7 +38,8 @@ void *filterCreate(obs_data_t *, obs_source_t *source)
 	instance->numChannels = static_cast<std::uint32_t>(
 		channels > engine::kMaxChannels ? engine::kMaxChannels : (channels == 0 ? 1 : channels));
 
-	instance->shared->engine.prepare(sampleRate, instance->numChannels);
+	instance->shared->chain.engine.prepare(sampleRate, instance->numChannels);
+	applyFilterSettings(settings, instance->shared->chain);
 	instance->registryId = FilterRegistry::instance().add(source, instance->shared);
 
 	obs_log(LOG_INFO, "filter created (%.0f Hz, %u ch)", sampleRate, instance->numChannels);
@@ -63,8 +65,19 @@ obs_audio_data *filterAudio(void *data, obs_audio_data *audio)
 		planes[c] = reinterpret_cast<float *>(audio->data[c]);
 
 	engine::AudioBlock block{planes.data(), instance->numChannels, audio->frames};
-	instance->shared->engine.process(block);
+	instance->shared->chain.engine.process(block);
 	return audio;
+}
+
+// Any thread (UI, OBS settings dialog). The chain takes values atomically.
+void filterUpdate(void *data, obs_data_t *settings)
+{
+	applyFilterSettings(settings, static_cast<FilterInstance *>(data)->shared->chain);
+}
+
+void filterGetDefaults(obs_data_t *settings)
+{
+	setFilterDefaults(settings);
 }
 
 obs_properties_t *filterGetProperties(void *)
@@ -87,6 +100,8 @@ void registerAudioFilter()
 	info.destroy = filterDestroy;
 	info.filter_audio = filterAudio;
 	info.get_properties = filterGetProperties;
+	info.get_defaults = filterGetDefaults;
+	info.update = filterUpdate;
 	obs_register_source(&info);
 }
 

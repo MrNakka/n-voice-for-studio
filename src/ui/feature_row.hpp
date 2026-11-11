@@ -31,7 +31,10 @@ public:
 	bool isAvailable() const { return spec_.available; }
 
 	void setSubtitle(const QString &text);
+	// Display only: does not emit toggled().
 	void setChecked(bool checked);
+	// Available features can be turned off while no filter instance exists.
+	void setInteractive(bool interactive);
 	bool isChecked() const;
 	void setLast(bool last);
 
@@ -46,6 +49,7 @@ protected:
 
 private:
 	Spec spec_;
+	bool interactive_ = true;
 	QLabel *subtitle_ = nullptr;
 	ToggleSwitch *toggle_ = nullptr;
 };

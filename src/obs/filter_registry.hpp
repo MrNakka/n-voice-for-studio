@@ -7,7 +7,7 @@
 //  - The audio thread never touches the registry.
 #pragma once
 
-#include <nvoice/engine/audio_engine.hpp>
+#include <nvoice/engine/voice_chain.hpp>
 
 #include <obs.hpp>
 
@@ -22,7 +22,7 @@ namespace nvoice::obs {
 // shared_ptr so the UI can finish reading meters even if the filter is
 // destroyed mid-frame.
 struct FilterShared {
-	engine::AudioEngine engine;
+	engine::VoiceChain chain;
 };
 
 struct FilterHandle {
