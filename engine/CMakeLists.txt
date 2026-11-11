@@ -17,7 +17,13 @@ add_library(NVoice::engine ALIAS nvoice_engine)
 
 target_sources(
   nvoice_engine
-  PRIVATE src/audio_engine.cpp src/auto_leveler.cpp src/compressor.cpp src/level_meter.cpp src/waveform_capture.cpp
+  PRIVATE
+    src/audio_engine.cpp
+    src/auto_leveler.cpp
+    src/compressor.cpp
+    src/level_meter.cpp
+    src/voice_analyzer.cpp
+    src/waveform_capture.cpp
 )
 target_include_directories(nvoice_engine PUBLIC include)
 

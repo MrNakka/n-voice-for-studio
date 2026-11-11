@@ -170,6 +170,21 @@ QDoubleSpinBox#NVoiceSpin {
 }
 QDoubleSpinBox#NVoiceSpin:focus { border-color: @accent; }
 
+QPushButton#NVoicePrimary {
+	background: @accent; color: #FFFFFF; border: none; border-radius: 6px;
+	padding: 6px 16px; font-weight: 600;
+}
+QPushButton#NVoiceSecondary:disabled { color: @textMuted; }
+#NVoiceScriptLine { background: transparent; border: 1px solid transparent; border-radius: 8px; }
+#NVoiceScriptLine[active="true"] { background: @accentSoft; border: 1px solid @accent; }
+#NVoiceScriptGuide { color: @textMuted; font-size: 11px; }
+#NVoiceScriptText { font-size: 15px; font-weight: 600; }
+#NVoiceRecording { color: @meterHot; font-weight: 600; }
+#NVoiceMessage { border-radius: 8px; padding: 8px 10px; }
+#NVoiceMessage[kind="warn"] { background: @surfaceAlt; border: 1px solid @meterHot; }
+#NVoiceMessage[kind="info"] { background: @surfaceAlt; border: 1px solid @border; }
+#NVoiceMessage[kind="note"] { color: @textMuted; font-size: 11px; padding: 0 2px; }
+
 #NVoiceRoot QScrollBar:vertical { background: transparent; width: 8px; }
 #NVoiceRoot QScrollBar::handle:vertical { background: @border; border-radius: 4px; min-height: 24px; }
 #NVoiceRoot QScrollBar::add-line, #NVoiceRoot QScrollBar::sub-line { height: 0; }

@@ -7,6 +7,7 @@
 #include "nvoice/engine/db.hpp"
 #include "nvoice/engine/parameters.hpp"
 #include "nvoice/engine/spsc_ring_buffer.hpp"
+#include "nvoice/engine/voice_analyzer.hpp"
 #include "nvoice/engine/voice_chain.hpp"
 #include "nvoice/engine/waveform_capture.hpp"
 
@@ -643,6 +644,135 @@ void test_waveform_full_ring_drops_without_blocking()
 	CHECK(wave.read(out, 16) == 4);
 }
 
+// ---------------------------------------------------------------------------
+// Auto setup: measurement and proposal
+// ---------------------------------------------------------------------------
+
+// Builds 50 ms frames: speech segments at the given RMS levels with short
+// pauses of room noise between them, like reading the three sample lines.
+std::vector<FrameStats> voiceSample(float noiseDb, std::initializer_list<float> speechDbs, int framesPerSegment = 50,
+				    int pauseFrames = 10)
+{
+	std::vector<FrameStats> frames;
+	auto push = [&](float db, int n) {
+		const float ms = std::pow(10.0f, db / 10.0f);
+		const float peak = std::sqrt(ms) * 1.8f; // speech crest factor ~5 dB
+		for (int i = 0; i < n; ++i) {
+			// +-3 dB syllable movement inside a segment
+			const float wobble = std::pow(10.0f, (static_cast<float>(i % 7) - 3.0f) / 10.0f);
+			frames.push_back({ms * wobble, peak});
+		}
+	};
+	push(noiseDb, pauseFrames);
+	for (float db : speechDbs) {
+		push(db, framesPerSegment);
+		push(noiseDb, pauseFrames);
+	}
+	return frames;
+}
+
+void test_analysis_capture_frames()
+{
+	AnalysisCapture cap;
+	cap.prepare(kRate); // 50 ms = 2400 frames
+	Buffer buf(2, 1200);
+	std::uint64_t phase = 0;
+	for (int i = 0; i < 5; ++i) { // 6000 frames: 2 full analysis frames
+		buf.fillSine(0.5f, 440.0, kRate, phase);
+		cap.process(buf.block());
+	}
+	FrameStats out[4];
+	CHECK(cap.read(out, 4) == 2);
+	CHECK_NEAR(linearToDb(std::sqrt(out[0].meanSquare)), linearToDb(0.5f / std::numbers::sqrt2_v<float>), 0.1f);
+	CHECK_NEAR(out[0].peak, 0.5f, 1e-3f);
+}
+
+void test_calibration_typical_voice()
+{
+	// Normal / quieter / louder lines in a quiet room.
+	const auto frames = voiceSample(-62.0f, {-24.0f, -30.0f, -18.0f});
+	const auto r = analyzeVoice(frames, -20.0f, 30.0f);
+	CHECK(r.usable);
+	CHECK(r.issues == kIssueNone);
+	CHECK_NEAR(r.stats.noiseDb, -62.0f, 3.5f);
+	CHECK_NEAR(r.stats.speechDb, -24.0f, 3.5f);
+	CHECK(r.stats.speechSeconds > 6.0f);
+	// Gate above noise, below quiet speech.
+	CHECK(r.proposal.gateDb > r.stats.noiseDb);
+	CHECK(r.proposal.gateDb < r.stats.quietSpeechDb - 5.0f);
+	// Boost reaches the quieter line; cut reaches the louder line.
+	CHECK(r.proposal.maxGainDb >= -20.0f - r.stats.quietSpeechDb - 0.5f);
+	CHECK(r.proposal.maxCutDb >= r.stats.loudSpeechDb - (-20.0f));
+	CHECK(r.proposal.compStrength >= 10.0f && r.proposal.compStrength <= 85.0f);
+}
+
+void test_calibration_quiet_speaker_gets_more_boost()
+{
+	const auto normal = analyzeVoice(voiceSample(-65.0f, {-24.0f, -28.0f, -20.0f}), -20.0f, 30.0f);
+	const auto quiet = analyzeVoice(voiceSample(-65.0f, {-36.0f, -40.0f, -32.0f}), -20.0f, 30.0f);
+	CHECK(quiet.usable && normal.usable);
+	CHECK(quiet.proposal.maxGainDb > normal.proposal.maxGainDb + 8.0f);
+	CHECK(!(quiet.issues & kIssueTooQuiet)); // -36 dBFS is quiet but workable
+}
+
+void test_calibration_wide_dynamics_get_more_compression()
+{
+	const auto narrow = analyzeVoice(voiceSample(-65.0f, {-24.0f, -26.0f, -22.0f}), -20.0f, 30.0f);
+	const auto wide = analyzeVoice(voiceSample(-65.0f, {-24.0f, -38.0f, -10.0f}), -20.0f, 30.0f);
+	CHECK(wide.proposal.compStrength > narrow.proposal.compStrength + 20.0f);
+	CHECK(wide.proposal.maxCutDb > narrow.proposal.maxCutDb);
+}
+
+void test_calibration_noisy_room()
+{
+	const auto r = analyzeVoice(voiceSample(-40.0f, {-20.0f, -24.0f, -16.0f}), -20.0f, 30.0f);
+	CHECK(r.usable);
+	CHECK(r.issues & kIssueNoisy);
+	// Gate moves up with the noise so the noise itself is not boosted.
+	CHECK(r.proposal.gateDb > -40.0f);
+	CHECK(r.proposal.gateDb <= r.stats.quietSpeechDb - 5.5f);
+}
+
+void test_calibration_problems_detected()
+{
+	// Hardly any speech: retry.
+	const auto silent = analyzeVoice(voiceSample(-65.0f, {-25.0f}, 20, 150), -20.0f, 30.0f);
+	CHECK(!silent.usable);
+	CHECK(silent.issues & kIssueNotEnoughSpeech);
+
+	// Very low mic level.
+	const auto low = analyzeVoice(voiceSample(-85.0f, {-54.0f, -58.0f, -50.0f}), -20.0f, 30.0f);
+	CHECK(low.issues & kIssueTooQuiet);
+
+	// Clipping.
+	auto hot = voiceSample(-65.0f, {-10.0f, -14.0f, -6.0f});
+	hot[80].peak = 1.0f;
+	const auto clip = analyzeVoice(hot, -20.0f, 30.0f);
+	CHECK(clip.issues & kIssueClipping);
+
+	// Proposals always stay inside the parameter ranges.
+	for (const auto *r : {&low, &clip}) {
+		CHECK(r->proposal.gateDb >= params::kLevelerGate.min && r->proposal.gateDb <= params::kLevelerGate.max);
+		CHECK(r->proposal.maxGainDb <= params::kLevelerMaxGain.max);
+		CHECK(r->proposal.maxCutDb <= params::kLevelerMaxCut.max);
+	}
+}
+
+void test_engine_analysis_toggle()
+{
+	AudioEngine engine;
+	engine.prepare(kRate, 1);
+	Buffer buf(1, 2400);
+	auto b = buf.block();
+	engine.process(b);
+	FrameStats out[4];
+	CHECK(engine.analysis().read(out, 4) == 0); // off by default
+	engine.setAnalysisEnabled(true);
+	auto c = buf.block();
+	engine.process(c);
+	CHECK(engine.analysis().read(out, 4) == 1);
+}
+
 } // namespace
 
 int main()
@@ -676,6 +806,13 @@ int main()
 		{"waveform_across_channels_and_null_planes", test_waveform_across_channels_and_null_planes},
 		{"engine_waveform_toggle_and_alignment", test_engine_waveform_toggle_and_alignment},
 		{"waveform_full_ring_drops_without_blocking", test_waveform_full_ring_drops_without_blocking},
+		{"analysis_capture_frames", test_analysis_capture_frames},
+		{"calibration_typical_voice", test_calibration_typical_voice},
+		{"calibration_quiet_speaker_gets_more_boost", test_calibration_quiet_speaker_gets_more_boost},
+		{"calibration_wide_dynamics_get_more_compression", test_calibration_wide_dynamics_get_more_compression},
+		{"calibration_noisy_room", test_calibration_noisy_room},
+		{"calibration_problems_detected", test_calibration_problems_detected},
+		{"engine_analysis_toggle", test_engine_analysis_toggle},
 	};
 
 	for (const auto &[name, fn] : tests) {

@@ -11,6 +11,7 @@ void AudioEngine::prepare(double sampleRate, std::uint32_t numChannels)
 	outputMeter_.prepare(sampleRate_);
 	inputWave_.prepare(sampleRate_);
 	outputWave_.prepare(sampleRate_);
+	analysis_.prepare(sampleRate_);
 
 	for (std::size_t i = 0; i < stageCount_; ++i)
 		stages_[i]->prepare(sampleRate_, numChannels_);
@@ -44,9 +45,16 @@ void AudioEngine::process(AudioBlock &block) noexcept
 	}
 	waveformWasEnabled_ = wave;
 
+	const bool analyze = analysisEnabled_.load(std::memory_order_relaxed);
+	if (analyze && !analysisWasEnabled_)
+		analysis_.restart();
+	analysisWasEnabled_ = analyze;
+
 	inputMeter_.process(block);
 	if (wave)
 		inputWave_.process(block);
+	if (analyze)
+		analysis_.process(block);
 
 	for (std::size_t i = 0; i < stageCount_; ++i)
 		stages_[i]->process(block);

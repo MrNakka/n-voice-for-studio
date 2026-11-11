@@ -5,6 +5,8 @@
 
 #include "../config/app_settings.hpp"
 
+#include <nvoice/engine/voice_analyzer.hpp>
+
 #include <obs.hpp>
 
 #include <QElapsedTimer>
@@ -16,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 class QButtonGroup;
 class QComboBox;
@@ -30,6 +33,7 @@ struct FilterShared;
 
 namespace nvoice::ui {
 
+class CalibrationPage;
 class FeaturePage;
 class FeatureRow;
 class LevelMeterWidget;
@@ -80,6 +84,16 @@ private:
 	void openPage(const QString &featureId);
 	void showDashboard();
 	void setWaveformVisible(bool visible);
+
+	// Auto setup
+	void openCalibration();
+	void startCalibration();
+	void stopCalibration();
+	void finishCalibration();
+	void applyCalibration();
+	void rememberForUndo(); // snapshot for "元に戻す"
+	static void writePresetValues(obs_data_t *settings, config::Profile profile);
+	void showAppliedNotice(const QString &text);
 	void pollWaveform();
 
 	config::SettingsStore store_;
@@ -91,6 +105,12 @@ private:
 	QStackedWidget *stack_ = nullptr;
 	FeaturePage *compressorPage_ = nullptr;
 	FeaturePage *levelerPage_ = nullptr;
+	CalibrationPage *calibrationPage_ = nullptr;
+	QPushButton *calibButton_ = nullptr;
+	bool calibrating_ = false;
+	QElapsedTimer calibClock_;
+	std::vector<engine::FrameStats> calibFrames_;
+	engine::CalibrationResult calibResult_{};
 
 	// Header
 	QLabel *statusBadge_ = nullptr;

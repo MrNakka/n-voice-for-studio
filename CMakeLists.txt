@@ -57,6 +57,8 @@ target_sources(
     src/obs/filter_settings.hpp
     src/obs/nvoice_filter.cpp
     src/obs/nvoice_filter.hpp
+    src/ui/calibration_page.cpp
+    src/ui/calibration_page.hpp
     src/ui/dashboard_dock.cpp
     src/ui/dashboard_dock.hpp
     src/ui/feature_page.cpp

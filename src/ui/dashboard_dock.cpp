@@ -1,5 +1,6 @@
 #include "dashboard_dock.hpp"
 
+#include "calibration_page.hpp"
 #include "feature_page.hpp"
 #include "feature_row.hpp"
 #include "level_meter_widget.hpp"
@@ -95,8 +96,10 @@ DashboardDock::~DashboardDock()
 void DashboardDock::shutdown()
 {
 	timer_.stop();
-	if (selected_)
+	if (selected_) {
 		selected_->chain.engine.setWaveformEnabled(false);
+		selected_->chain.engine.setAnalysisEnabled(false);
+	}
 	selected_.reset();
 	selectedFilter_ = nullptr;
 }
@@ -215,6 +218,18 @@ void DashboardDock::buildPages()
 	};
 	levelerPage_ = new FeaturePage(lev, stack_);
 	pageHost(levelerPage_);
+
+	calibrationPage_ = new CalibrationPage(stack_);
+	auto *calibHost = new QWidget(stack_);
+	calibHost->setObjectName(QStringLiteral("NVoiceContent"));
+	auto *calibLayout = new QVBoxLayout(calibHost);
+	calibLayout->setContentsMargins(16, 14, 16, 16);
+	calibLayout->addWidget(calibrationPage_);
+	stack_->addWidget(calibHost);
+	connect(calibrationPage_, &CalibrationPage::backRequested, this, &DashboardDock::showDashboard);
+	connect(calibrationPage_, &CalibrationPage::startRequested, this, &DashboardDock::startCalibration);
+	connect(calibrationPage_, &CalibrationPage::cancelRequested, this, &DashboardDock::stopCalibration);
+	connect(calibrationPage_, &CalibrationPage::applyRequested, this, &DashboardDock::applyCalibration);
 }
 
 QWidget *DashboardDock::buildHeader()
@@ -322,6 +337,13 @@ QWidget *DashboardDock::buildPresets()
 		persist();
 		applyPreset(settings_.profile);
 	});
+
+	calibButton_ = new QPushButton(QStringLiteral("🎙  ") + T("NVoice.Calib.Button"), section);
+	calibButton_->setObjectName(QStringLiteral("NVoiceSecondary"));
+	calibButton_->setCursor(Qt::PointingHandCursor);
+	calibButton_->setToolTip(T("NVoice.Calib.Button.Tooltip"));
+	connect(calibButton_, &QPushButton::clicked, this, &DashboardDock::openCalibration);
+	layout->addWidget(calibButton_);
 
 	presetNotice_ = new QFrame(section);
 	presetNotice_->setObjectName(QStringLiteral("NVoiceNotice"));
@@ -537,6 +559,7 @@ void DashboardDock::applyTheme(config::Theme theme)
 	outputMeter_->setColors(p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
 	for (auto *page : {compressorPage_, levelerPage_})
 		page->applyPalette(p.accent, p.toggleOff, p.meterTrack);
+	calibrationPage_->applyPalette(p.accent, p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
 	for (auto *wave : {dashboardWave_, compressorWave_})
 		wave->setColors(p.border, p.textMuted, p.accent, p.meterHot, p.textMuted);
 	for (auto *row : rows_) {
@@ -564,6 +587,8 @@ void DashboardDock::setStatus(bool active)
 
 void DashboardDock::showNoSource()
 {
+	stopCalibration();
+	calibButton_->setEnabled(false);
 	selectedId_ = 0;
 	if (selected_)
 		selected_->chain.engine.setWaveformEnabled(false);
@@ -639,6 +664,7 @@ void DashboardDock::refreshSources()
 	if (selectionChanged) {
 		meter_->clear();
 		outputMeter_->clear();
+		stopCalibration();
 		if (selected_)
 			selected_->chain.engine.setWaveformEnabled(false);
 		waveHistory_->clear();
@@ -670,6 +696,7 @@ void DashboardDock::refreshSources()
 	meterArea_->setVisible(true);
 	noSourceHint_->setVisible(false);
 	inputChip_->setVisible(true);
+	calibButton_->setEnabled(true);
 	for (auto *row : rows_)
 		row->setInteractive(true);
 	for (auto *page : {compressorPage_, levelerPage_})
@@ -700,6 +727,18 @@ void DashboardDock::tick()
 	outputValue_->setText(formatDb(output.rmsDb));
 
 	pollWaveform();
+
+	if (calibrating_) {
+		engine::FrameStats frames[64];
+		std::size_t n;
+		while ((n = chain.engine.analysis().read(frames, 64)) > 0)
+			calibFrames_.insert(calibFrames_.end(), frames, frames + n);
+		const double elapsed = static_cast<double>(calibClock_.elapsed()) / 1000.0;
+		calibrationPage_->setLevel(reading.rmsDb, reading.peakDb);
+		calibrationPage_->setProgress(elapsed);
+		if (elapsed >= CalibrationPage::kDurationSec)
+			finishCalibration();
+	}
 
 	// Only the visible page reads its meter (reading resets the peak hold).
 	if (stack_->currentWidget()->isAncestorOf(compressorPage_))
@@ -812,44 +851,56 @@ void DashboardDock::applyPreset(config::Profile profile)
 	if (!filter)
 		return; // selection is saved; nothing to apply yet
 
-	// Remember the current values so the preset can be undone (§4.9).
-	{
-		OBSDataAutoRelease current = obs_source_get_settings(filter);
-		OBSDataAutoRelease snapshot = obs_data_create();
-		obs_data_set_bool(snapshot, obs::kCompressorEnabled,
-				  obs_data_get_bool(current, obs::kCompressorEnabled));
-		obs_data_set_bool(snapshot, obs::kLevelerEnabled, obs_data_get_bool(current, obs::kLevelerEnabled));
-		for (const auto *spec : engine::params::kAll)
-			obs::setParam(snapshot, *spec, obs::getParam(current, *spec));
-		undoJson_ = obs_data_get_json(snapshot);
-		undoFilterId_ = selectedId_;
-	}
+	rememberForUndo(); // so the preset can be undone (§4.9)
 
-	namespace p = engine::params;
-	const auto &v = config::presetFor(profile);
-	const auto tr = engine::compressorFromStrength(v.compStrength);
-	writeFilter([&](obs_data_t *d) {
-		obs_data_set_bool(d, obs::kCompressorEnabled, true);
-		obs_data_set_bool(d, obs::kLevelerEnabled, true);
-		obs::setParam(d, p::kCompStrength, v.compStrength);
-		obs::setParam(d, p::kCompThreshold, tr.threshold);
-		obs::setParam(d, p::kCompRatio, tr.ratio);
-		obs::setParam(d, p::kCompAttack, v.compAttackMs);
-		obs::setParam(d, p::kCompRelease, v.compReleaseMs);
-		obs::setParam(d, p::kCompMakeup, v.compMakeupDb);
-		obs::setParam(d, p::kLevelerTarget, v.levelerTargetDb);
-		obs::setParam(d, p::kLevelerMaxGain, v.levelerMaxGainDb);
-		obs::setParam(d, p::kLevelerMaxCut, v.levelerMaxCutDb);
-		obs::setParam(d, p::kLevelerSpeed, v.levelerSpeedSec);
-		obs::setParam(d, p::kLevelerGate, v.levelerGateDb);
-	});
+	writeFilter([&](obs_data_t *d) { writePresetValues(d, profile); });
 	syncFromFilter();
 
 	const QString name =
 		presetButtons_.value(static_cast<int>(profile))
 			? presetButtons_[static_cast<int>(profile)]->text().section(QStringLiteral("  "), 1)
 			: QString();
-	presetNoticeText_->setText(T("NVoice.Preset.Applied").arg(name));
+	showAppliedNotice(T("NVoice.Preset.Applied").arg(name));
+}
+
+void DashboardDock::writePresetValues(obs_data_t *d, config::Profile profile)
+{
+	namespace p = engine::params;
+	const auto &v = config::presetFor(profile);
+	const auto tr = engine::compressorFromStrength(v.compStrength);
+	obs_data_set_bool(d, obs::kCompressorEnabled, true);
+	obs_data_set_bool(d, obs::kLevelerEnabled, true);
+	obs::setParam(d, p::kCompStrength, v.compStrength);
+	obs::setParam(d, p::kCompThreshold, tr.threshold);
+	obs::setParam(d, p::kCompRatio, tr.ratio);
+	obs::setParam(d, p::kCompAttack, v.compAttackMs);
+	obs::setParam(d, p::kCompRelease, v.compReleaseMs);
+	obs::setParam(d, p::kCompMakeup, v.compMakeupDb);
+	obs::setParam(d, p::kLevelerTarget, v.levelerTargetDb);
+	obs::setParam(d, p::kLevelerMaxGain, v.levelerMaxGainDb);
+	obs::setParam(d, p::kLevelerMaxCut, v.levelerMaxCutDb);
+	obs::setParam(d, p::kLevelerSpeed, v.levelerSpeedSec);
+	obs::setParam(d, p::kLevelerGate, v.levelerGateDb);
+}
+
+void DashboardDock::rememberForUndo()
+{
+	OBSSource filter = OBSGetStrongRef(selectedFilter_);
+	if (!filter)
+		return;
+	OBSDataAutoRelease current = obs_source_get_settings(filter);
+	OBSDataAutoRelease snapshot = obs_data_create();
+	obs_data_set_bool(snapshot, obs::kCompressorEnabled, obs_data_get_bool(current, obs::kCompressorEnabled));
+	obs_data_set_bool(snapshot, obs::kLevelerEnabled, obs_data_get_bool(current, obs::kLevelerEnabled));
+	for (const auto *spec : engine::params::kAll)
+		obs::setParam(snapshot, *spec, obs::getParam(current, *spec));
+	undoJson_ = obs_data_get_json(snapshot);
+	undoFilterId_ = selectedId_;
+}
+
+void DashboardDock::showAppliedNotice(const QString &text)
+{
+	presetNoticeText_->setText(text);
 	undoButton_->setVisible(true);
 	presetNotice_->setVisible(true);
 }
@@ -954,6 +1005,96 @@ void DashboardDock::pollWaveform()
 		if (compressorWave_->isVisible())
 			compressorWave_->update();
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Auto setup (声に合わせて自動設定)
+// ---------------------------------------------------------------------------
+
+void DashboardDock::openCalibration()
+{
+	if (!selected_)
+		return;
+	const int index = static_cast<int>(settings_.profile);
+	const QString name = presetButtons_.value(index)
+				     ? presetButtons_[index]->text().section(QStringLiteral("  "), 1)
+				     : QString();
+	calibrationPage_->setProfile(settings_.profile, name);
+	calibrationPage_->showIntro();
+	stack_->setCurrentWidget(calibrationPage_->parentWidget());
+}
+
+void DashboardDock::startCalibration()
+{
+	if (!selected_)
+		return;
+	auto &engine = selected_->chain.engine;
+	engine.setAnalysisEnabled(false);
+	engine::FrameStats discard[64];
+	while (engine.analysis().read(discard, 64) > 0) {
+	}
+	calibFrames_.clear();
+	engine.setAnalysisEnabled(true);
+	calibClock_.start();
+	calibrating_ = true;
+	calibrationPage_->showRecording();
+}
+
+void DashboardDock::stopCalibration()
+{
+	if (selected_)
+		selected_->chain.engine.setAnalysisEnabled(false);
+	if (calibrating_) {
+		calibrating_ = false;
+		calibrationPage_->showIntro();
+	}
+}
+
+void DashboardDock::finishCalibration()
+{
+	calibrating_ = false;
+	if (selected_)
+		selected_->chain.engine.setAnalysisEnabled(false);
+
+	OBSSource filter = OBSGetStrongRef(selectedFilter_);
+	if (!filter) {
+		calibrationPage_->showIntro();
+		return;
+	}
+	OBSDataAutoRelease settings = obs_source_get_settings(filter);
+	namespace p = engine::params;
+	const CalibrationPage::Current current{
+		obs::getParam(settings, p::kLevelerTarget),  obs::getParam(settings, p::kLevelerGate),
+		obs::getParam(settings, p::kLevelerMaxGain), obs::getParam(settings, p::kLevelerMaxCut),
+		obs::getParam(settings, p::kCompStrength),
+	};
+	// Start from the selected stream style, as the page says.
+	const auto &base = config::presetFor(settings_.profile);
+	calibResult_ = engine::analyzeVoice(calibFrames_, base.levelerTargetDb, base.compStrength);
+	calibrationPage_->showResult(calibResult_, current);
+}
+
+void DashboardDock::applyCalibration()
+{
+	if (!calibResult_.usable)
+		return;
+	rememberForUndo();
+
+	namespace p = engine::params;
+	const auto &prop = calibResult_.proposal;
+	const auto tr = engine::compressorFromStrength(prop.compStrength);
+	writeFilter([&](obs_data_t *d) {
+		writePresetValues(d, settings_.profile);
+		obs::setParam(d, p::kLevelerTarget, prop.targetDb);
+		obs::setParam(d, p::kLevelerGate, prop.gateDb);
+		obs::setParam(d, p::kLevelerMaxGain, prop.maxGainDb);
+		obs::setParam(d, p::kLevelerMaxCut, prop.maxCutDb);
+		obs::setParam(d, p::kCompStrength, prop.compStrength);
+		obs::setParam(d, p::kCompThreshold, tr.threshold);
+		obs::setParam(d, p::kCompRatio, tr.ratio);
+	});
+	showDashboard();
+	showAppliedNotice(T("NVoice.Calib.Applied"));
 }
 
 } // namespace nvoice::ui

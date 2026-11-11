@@ -8,6 +8,7 @@
 #include "audio_block.hpp"
 #include "level_meter.hpp"
 #include "processor.hpp"
+#include "voice_analyzer.hpp"
 #include "waveform_capture.hpp"
 
 #include <array>
@@ -42,6 +43,11 @@ public:
 	WaveformCapture &inputWaveform() noexcept { return inputWave_; }
 	WaveformCapture &outputWaveform() noexcept { return outputWave_; }
 
+	// Voice measurement for auto setup. Taps the input before processing.
+	void setAnalysisEnabled(bool enabled) noexcept { analysisEnabled_.store(enabled, std::memory_order_relaxed); }
+	bool analysisEnabled() const noexcept { return analysisEnabled_.load(std::memory_order_relaxed); }
+	AnalysisCapture &analysis() noexcept { return analysis_; }
+
 	double sampleRate() const noexcept { return sampleRate_; }
 	std::uint32_t numChannels() const noexcept { return numChannels_; }
 	std::size_t stageCount() const noexcept { return stageCount_; }
@@ -60,6 +66,10 @@ private:
 	WaveformCapture outputWave_;
 	std::atomic<bool> waveformEnabled_{false};
 	bool waveformWasEnabled_ = false; // audio thread
+
+	AnalysisCapture analysis_;
+	std::atomic<bool> analysisEnabled_{false};
+	bool analysisWasEnabled_ = false; // audio thread
 };
 
 } // namespace nvoice::engine
