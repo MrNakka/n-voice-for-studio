@@ -12,6 +12,9 @@ class LevelMeterWidget : public QWidget {
 	Q_OBJECT
 
 public:
+	// Lowest level shown. Below this the bar is empty and the UI shows -inf.
+	static constexpr float kFloorDb = -60.0f;
+
 	explicit LevelMeterWidget(QWidget *parent = nullptr);
 
 	// rmsDb / peakDb in dBFS (values <= -120 mean silence).
@@ -30,7 +33,6 @@ protected:
 	void paintEvent(QPaintEvent *event) override;
 
 private:
-	static constexpr float kFloorDb = -60.0f;
 	static constexpr float kHotDb = -6.0f;
 
 	float toFraction(float db) const;

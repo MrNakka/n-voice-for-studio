@@ -29,7 +29,7 @@ namespace {
 
 constexpr int kTickMs = 33;             // ~30 fps (requirements: 30-60 fps cap)
 constexpr int kSourceRefreshTicks = 15; // ~0.5 s
-constexpr float kSignalThresholdDb = -60.0f;
+constexpr float kSignalThresholdDb = LevelMeterWidget::kFloorDb;
 constexpr qint64 kSignalHoldMs = 2000;
 constexpr int kCompactPresetWidth = 470;
 
@@ -38,9 +38,10 @@ QString T(const char *key)
 	return QString::fromUtf8(obs_module_text(key));
 }
 
+// Matches the bar: anything below the meter floor reads as silence.
 QString formatDb(float db)
 {
-	if (db <= -119.0f)
+	if (db < LevelMeterWidget::kFloorDb)
 		return QStringLiteral("-∞ dBFS");
 	return QStringLiteral("%1 dBFS").arg(static_cast<double>(db), 0, 'f', 1);
 }
