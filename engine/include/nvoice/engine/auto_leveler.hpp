@@ -1,6 +1,12 @@
 // N Voice for Studio - Audio Engine (OBS-independent)
 // Slow automatic gain that keeps speech near a target level.
 //
+// The level it follows is what OBS's mixer meter shows: a sample-peak meter
+// with instant attack and 23.53 dB/s decay, averaged in dB over 0.4 s of
+// speech (pauses are skipped). With the default target
+// (levels::kNormalPeakDb) normal speech typically reads at the start of
+// OBS's red zone.
+//
 // The gain only moves while the input is above the gate ("無音判定"), so
 // pauses and room noise are not pushed up. Reductions move faster than
 // boosts so a sudden loud voice is tamed quickly without pumping on pauses.
@@ -15,7 +21,7 @@ namespace nvoice::engine {
 class AutoLeveler final : public AudioProcessor {
 public:
 	struct Settings {
-		float targetDb;  // desired speech level (RMS, dBFS)
+		float targetDb;  // desired speech level on the OBS meter (dBFS)
 		float maxGainDb; // most boost for quiet speech
 		float maxCutDb;  // most reduction for loud speech (positive number)
 		float speedSec;  // time to follow a level change
@@ -60,8 +66,12 @@ private:
 
 	// Audio thread state
 	bool wasEnabled_ = false;
-	double meanSquare_ = 0.0;
-	double gateMeanSquare_ = 0.0;
+	double meanSquare_ = 0.0;     // 0.4 s RMS (decay-hold comparison)
+	double gateMeanSquare_ = 0.0; // 50 ms RMS (gate)
+	float meterDb_ = 0.0f;        // OBS-style meter, dB average over speech
+	bool meterValid_ = false;     // meterDb_ holds a measurement
+	float meter_ = 0.0f;          // OBS-style meter (linear)
+	float meterDecay_ = 1.0f;     // per-sample decay factor
 	float gainDb_ = 0.0f;
 };
 

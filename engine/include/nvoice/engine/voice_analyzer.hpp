@@ -44,12 +44,17 @@ private:
 };
 
 struct VoiceStats {
+	// RMS levels (50 ms frames)
 	float noiseDb;       // room noise between words (10th percentile)
 	float speechDb;      // typical speaking level (median of speech frames)
 	float quietSpeechDb; // quieter speech (25th percentile of speech frames)
 	float loudSpeechDb;  // louder speech (90th percentile of speech frames)
-	float peakDb;        // highest sample peak
-	float speechSeconds; // how long the user actually spoke
+	// Peak levels: what the OBS meter shows while speaking
+	float speechPeakDb;      // typical (median)
+	float quietSpeechPeakDb; // quieter speech (25th percentile)
+	float loudSpeechPeakDb;  // louder speech (90th percentile)
+	float peakDb;            // highest sample peak
+	float speechSeconds;     // how long the user actually spoke
 	float totalSeconds;
 };
 
@@ -62,7 +67,6 @@ enum CalibrationIssue : unsigned {
 };
 
 struct CalibrationProposal {
-	float targetDb; // the target the proposal was planned for (unchanged input)
 	float gateDb;
 	float maxGainDb;
 	float maxCutDb;
@@ -82,14 +86,15 @@ inline constexpr float kSpeechAboveNoiseDb = 10.0f; // a frame counts as speech 
 inline constexpr float kMinSpeechSeconds = 2.0f;
 inline constexpr float kGateAboveNoiseDb = 8.0f;
 inline constexpr float kGateBelowQuietSpeechDb = 6.0f;
-inline constexpr float kTooQuietDb = -50.0f;
+inline constexpr float kTooQuietPeakDb = -40.0f; // typical speech peak on the OBS meter
 inline constexpr float kClippingDb = -1.0f;
 inline constexpr float kNoisyDb = -45.0f;
 inline constexpr float kTypicalRangeDb = 15.0f; // speech range that keeps the base strength
 inline constexpr float kStrengthPerDb = 2.5f;
 } // namespace calibration
 
-// targetDb: the leveler target to plan for (kept as is).
+// targetDb: where normal speech should read on the OBS meter
+// (levels::kNormalPeakDb); boost and cut are planned against it.
 // baseStrength: the current compressor strength, adjusted by the measured range.
 CalibrationResult analyzeVoice(std::span<const FrameStats> frames, float targetDb, float baseStrength,
 			       double frameSec = AnalysisCapture::kFrameSec);

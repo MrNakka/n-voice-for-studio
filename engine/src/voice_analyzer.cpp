@@ -102,12 +102,16 @@ CalibrationResult analyzeVoice(std::span<const FrameStats> frames, float targetD
 	const float noise = percentile(sorted, 0.10f);
 	const float speechFloor = std::max(noise + c::kSpeechAboveNoiseDb, linearToDb(1e-3f)); // >= -60 dBFS
 
-	std::vector<float> speech;
-	for (float l : levels) {
-		if (l > speechFloor)
-			speech.push_back(l);
+	std::vector<float> speech;      // RMS of speech frames
+	std::vector<float> speechPeaks; // peak of speech frames (OBS meter reading)
+	for (std::size_t i = 0; i < levels.size(); ++i) {
+		if (levels[i] > speechFloor) {
+			speech.push_back(levels[i]);
+			speechPeaks.push_back(linearToDb(frames[i].peak));
+		}
 	}
 	std::sort(speech.begin(), speech.end());
+	std::sort(speechPeaks.begin(), speechPeaks.end());
 
 	auto &s = result.stats;
 	s.noiseDb = noise;
@@ -116,6 +120,9 @@ CalibrationResult analyzeVoice(std::span<const FrameStats> frames, float targetD
 	s.speechDb = percentile(speech, 0.50f);
 	s.quietSpeechDb = percentile(speech, 0.25f);
 	s.loudSpeechDb = percentile(speech, 0.90f);
+	s.speechPeakDb = percentile(speechPeaks, 0.50f);
+	s.quietSpeechPeakDb = percentile(speechPeaks, 0.25f);
+	s.loudSpeechPeakDb = percentile(speechPeaks, 0.90f);
 
 	unsigned issues = kIssueNone;
 	if (s.speechSeconds < c::kMinSpeechSeconds)
@@ -123,7 +130,7 @@ CalibrationResult analyzeVoice(std::span<const FrameStats> frames, float targetD
 	if (s.peakDb > c::kClippingDb)
 		issues |= kIssueClipping;
 	if (!(issues & kIssueNotEnoughSpeech)) {
-		if (s.speechDb < c::kTooQuietDb)
+		if (s.speechPeakDb < c::kTooQuietPeakDb)
 			issues |= kIssueTooQuiet;
 		if (noise > c::kNoisyDb)
 			issues |= kIssueNoisy;
@@ -134,19 +141,18 @@ CalibrationResult analyzeVoice(std::span<const FrameStats> frames, float targetD
 		return result;
 
 	auto &prop = result.proposal;
-	prop.targetDb = p::kLevelerTarget.clamp(targetDb);
 
 	// Gate: just above the room noise, but safely below quiet speech so
 	// quiet words still move the leveler.
 	float gate = std::min(noise + c::kGateAboveNoiseDb, s.quietSpeechDb - c::kGateBelowQuietSpeechDb);
 	prop.gateDb = p::kLevelerGate.clamp(roundTo(gate, 1.0f));
 
-	// Max boost: enough to bring quieter speech up to the target.
-	const float neededBoost = targetDb - s.quietSpeechDb;
+	// Max boost: enough to bring quieter speech up to the target reading.
+	const float neededBoost = targetDb - s.quietSpeechPeakDb;
 	prop.maxGainDb = p::kLevelerMaxGain.clamp(roundTo(std::max(3.0f, neededBoost), 1.0f));
 
-	// Max cut: enough to bring louder speech down to the target.
-	const float neededCut = s.loudSpeechDb - targetDb;
+	// Max cut: enough to bring louder speech down to the target reading.
+	const float neededCut = s.loudSpeechPeakDb - targetDb;
 	prop.maxCutDb = p::kLevelerMaxCut.clamp(roundTo(std::max(3.0f, neededCut + 3.0f), 1.0f));
 
 	// Strength: a wider gap between quiet and loud speech needs more evening out.

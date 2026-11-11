@@ -1,6 +1,7 @@
 #include "nvoice/engine/auto_leveler.hpp"
 
 #include "nvoice/engine/db.hpp"
+#include "nvoice/engine/levels.hpp"
 #include "nvoice/engine/parameters.hpp"
 
 #include <algorithm>
@@ -41,6 +42,7 @@ void AutoLeveler::setEnabled(bool enabled) noexcept
 void AutoLeveler::prepare(double sampleRate, std::uint32_t)
 {
 	sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
+	meterDecay_ = static_cast<float>(std::pow(10.0, -levels::kObsMeterDecayDbPerSec / 20.0 / sampleRate_));
 	reset();
 }
 
@@ -48,6 +50,9 @@ void AutoLeveler::reset() noexcept
 {
 	meanSquare_ = 0.0;
 	gateMeanSquare_ = 0.0;
+	meterDb_ = 0.0f;
+	meterValid_ = false;
+	meter_ = 0.0f;
 	gainDb_ = 0.0f;
 	publishedGain_.store(0.0f, std::memory_order_relaxed);
 }
@@ -64,24 +69,32 @@ void AutoLeveler::process(AudioBlock &block) noexcept
 	const std::uint32_t channels = std::min(block.numChannels, kMaxChannels);
 	const std::uint32_t frames = block.numFrames;
 
-	// 1. Measure the input (before gain) for this block.
-	double sumSquares = 0.0;
 	std::uint32_t measured = 0;
-	for (std::uint32_t c = 0; c < channels; ++c) {
-		const float *ch = block.channels[c];
-		if (ch == nullptr)
-			continue;
-		++measured;
-		for (std::uint32_t i = 0; i < frames; ++i)
-			sumSquares += static_cast<double>(ch[i]) * ch[i];
-	}
+	for (std::uint32_t c = 0; c < channels; ++c)
+		measured += block.channels[c] != nullptr ? 1u : 0u;
 	if (measured == 0)
 		return;
 
+	// 1. Measure the input (before gain): RMS for the gate, and an OBS-style
+	//    peak meter for the level to follow.
+	double sumSquares = 0.0;
+	double meterSum = 0.0;
+	for (std::uint32_t i = 0; i < frames; ++i) {
+		float peak = 0.0f;
+		for (std::uint32_t c = 0; c < channels; ++c) {
+			if (const float *ch = block.channels[c]) {
+				sumSquares += static_cast<double>(ch[i]) * ch[i];
+				peak = std::max(peak, std::fabs(ch[i]));
+			}
+		}
+		meter_ = std::max(peak, meter_ * meterDecay_);
+		meterSum += static_cast<double>(meter_) * meter_;
+	}
+
 	const double blockMs = sumSquares / (static_cast<double>(frames) * measured);
 	const double detAlpha = std::exp(-static_cast<double>(frames) / (kDetectorSec * sampleRate_));
-	meanSquare_ = detAlpha * meanSquare_ + (1.0 - detAlpha) * blockMs;
 	const double gateAlpha = std::exp(-static_cast<double>(frames) / (kGateDetectorSec * sampleRate_));
+	meanSquare_ = detAlpha * meanSquare_ + (1.0 - detAlpha) * blockMs;
 	gateMeanSquare_ = gateAlpha * gateMeanSquare_ + (1.0 - gateAlpha) * blockMs;
 
 	auto toDb = [](double ms) {
@@ -89,13 +102,27 @@ void AutoLeveler::process(AudioBlock &block) noexcept
 	};
 	const float levelDb = toDb(meanSquare_);
 	const float gateLevelDb = toDb(gateMeanSquare_);
+	const float blockMeterDb = toDb(meterSum / frames);
 
-	// 2. Move the gain toward the target, but only while someone is speaking.
+	// 2. Average the meter reading in dB over everything above the gate
+	//    (pauses skipped, dips between syllables included), so the reading
+	//    the user sees on the OBS meter while talking meets the target.
+	const bool aboveGate = gateLevelDb > gate_.load(std::memory_order_relaxed);
+	if (aboveGate) {
+		if (!meterValid_) {
+			meterDb_ = blockMeterDb;
+			meterValid_ = true;
+		} else {
+			meterDb_ = static_cast<float>(detAlpha * meterDb_ + (1.0 - detAlpha) * blockMeterDb);
+		}
+	}
+
+	// 3. Move the gain toward the target, but only while someone is speaking:
+	//    above the gate and not in the decay right after speech.
 	const float startGain = gainDb_;
-	const bool speaking = gateLevelDb > gate_.load(std::memory_order_relaxed) &&
-			      gateLevelDb > levelDb - kDecayHoldDb;
-	if (speaking) {
-		const float desired = std::clamp(target_.load(std::memory_order_relaxed) - levelDb,
+	const bool speaking = aboveGate && gateLevelDb > levelDb - kDecayHoldDb;
+	if (speaking && meterValid_) {
+		const float desired = std::clamp(target_.load(std::memory_order_relaxed) - meterDb_,
 						 -maxCut_.load(std::memory_order_relaxed),
 						 maxGain_.load(std::memory_order_relaxed));
 		double tau = speed_.load(std::memory_order_relaxed);
@@ -109,7 +136,7 @@ void AutoLeveler::process(AudioBlock &block) noexcept
 	gainDb_ =
 		std::clamp(gainDb_, -maxCut_.load(std::memory_order_relaxed), maxGain_.load(std::memory_order_relaxed));
 
-	// 3. Apply, ramping across the block to avoid zipper noise.
+	// 4. Apply, ramping across the block to avoid zipper noise.
 	const float g0 = dbToLinear(startGain);
 	const float g1 = dbToLinear(gainDb_);
 	const float step = (g1 - g0) / static_cast<float>(frames);

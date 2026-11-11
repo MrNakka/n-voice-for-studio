@@ -22,6 +22,7 @@ target_sources(
     src/auto_leveler.cpp
     src/compressor.cpp
     src/level_meter.cpp
+    src/peak_limiter.cpp
     src/voice_analyzer.cpp
     src/waveform_capture.cpp
 )

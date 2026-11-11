@@ -29,7 +29,6 @@ public:
 
 	// Current values, shown next to the proposal ("今 → 提案").
 	struct Current {
-		float targetDb;
 		float gateDb;
 		float maxGainDb;
 		float maxCutDb;
@@ -47,8 +46,8 @@ public:
 	void setLevel(float rmsDb, float peakDb);
 	void showResult(const engine::CalibrationResult &result, const Current &current);
 
-	void applyPalette(const QColor &accent, const QColor &track, const QColor &fillStart, const QColor &fillEnd,
-			  const QColor &hot);
+	void applyPalette(const QColor &accent, const QColor &track, const QColor &green, const QColor &yellow,
+			  const QColor &red);
 
 signals:
 	void backRequested();

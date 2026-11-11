@@ -7,6 +7,8 @@
 #include "nvoice/engine/db.hpp"
 #include "nvoice/engine/parameters.hpp"
 #include "nvoice/engine/spsc_ring_buffer.hpp"
+#include "nvoice/engine/levels.hpp"
+#include "nvoice/engine/peak_limiter.hpp"
 #include "nvoice/engine/voice_analyzer.hpp"
 #include "nvoice/engine/voice_chain.hpp"
 #include "nvoice/engine/waveform_capture.hpp"
@@ -226,6 +228,9 @@ void test_parameters()
 	CHECK(kCompRatio.clamp(std::nanf("")) == kCompRatio.defaultValue);
 	CHECK(findParameter("compressor.threshold") == &kCompThreshold);
 	CHECK(findParameter("does.not.exist") == nullptr);
+	CHECK(params::kLevelerTarget.defaultValue == levels::kLevelerTargetDb);
+	CHECK(params::kCompThreshold.defaultValue ==
+	      compressorFromStrength(params::kCompStrength.defaultValue).threshold);
 
 	for (const auto *spec : kAll) {
 		CHECK(spec->min < spec->max);
@@ -426,9 +431,12 @@ void test_leveler_raises_quiet_speech_to_target()
 	lev.prepare(kRate, 2);
 	lev.setSettings({-20.0f, 30.0f, 12.0f, 1.0f, -50.0f});
 	lev.setEnabled(true);
+	// The target is the OBS meter reading (sample peak); for a sine that is
+	// its RMS + 3 dB. Input reads -29, so +9 dB brings it to -20.
 	const auto out = runSine(lev, -32.0f, 12.0);
-	CHECK_NEAR(out.rmsDb, -20.0f, 1.0f);
-	CHECK_NEAR(lev.currentGainDb(), 12.0f, 1.0f);
+	CHECK_NEAR(out.peakDb, -20.0f, 1.0f);
+	CHECK_NEAR(out.rmsDb, -23.0f, 1.0f);
+	CHECK_NEAR(lev.currentGainDb(), 9.0f, 1.0f);
 }
 
 void test_leveler_respects_max_gain()
@@ -449,9 +457,9 @@ void test_leveler_cuts_loud_speech_fast()
 	lev.setSettings({-20.0f, 12.0f, 12.0f, 4.0f, -50.0f});
 	lev.setEnabled(true);
 	// Cuts move kCutSpeedup times faster than boosts: 4 s / 4 = 1 s.
-	const auto out = runSine(lev, -10.0f, 5.0);
-	CHECK_NEAR(out.rmsDb, -20.0f, 1.0f);
-	CHECK(lev.currentGainDb() < -9.0f);
+	const auto out = runSine(lev, -10.0f, 5.0); // reads -7 on the meter
+	CHECK_NEAR(out.peakDb, -19.0f, 1.0f);       // -12 dB max cut
+	CHECK(lev.currentGainDb() < -11.0f);
 }
 
 void test_leveler_does_not_boost_silence_or_noise()
@@ -513,16 +521,21 @@ void test_voice_chain_order_and_bypass()
 {
 	VoiceChain chain;
 	chain.engine.prepare(kRate, 2);
-	CHECK(chain.engine.stageCount() == 2);
+	CHECK(chain.engine.stageCount() == 3);
 
-	// Everything off: the chain is a bit-exact pass-through.
+	// Leveler / compressor off: below the ceiling the chain is a bit-exact
+	// pass-through, delayed by the limiter's look-ahead.
+	const std::uint32_t lat = chain.limiter.latencyFrames();
 	Buffer buf(2, 480);
 	std::uint64_t phase = 0;
 	buf.fillSine(0.5f, 440.0, kRate, phase);
 	const auto original = buf.planes;
 	auto block = buf.block();
 	chain.engine.process(block);
-	CHECK(buf.planes == original);
+	bool delayedExact = true;
+	for (std::uint32_t i = lat; i < 480; ++i)
+		delayedExact = delayedExact && buf.planes[0][i] == original[0][i - lat];
+	CHECK(delayedExact);
 
 	// Leveler runs first: the compressor sees the boosted signal. A quiet
 	// voice that alone stays under the threshold gets compressed once the
@@ -543,11 +556,20 @@ void test_strength_mapping()
 	CHECK_NEAR(mid.threshold, params::kCompThreshold.defaultValue, 1e-4f);
 	CHECK_NEAR(mid.ratio, params::kCompRatio.defaultValue, 1e-4f);
 	const auto gentle = compressorFromStrength(0.0f);
-	CHECK_NEAR(gentle.threshold, -10.0f, 1e-4f);
+	CHECK_NEAR(gentle.threshold, -9.0f, 1e-4f); // only louder-than-normal speech
 	CHECK_NEAR(gentle.ratio, 1.5f, 1e-4f);
 	const auto strong = compressorFromStrength(250.0f); // clamped to 100 %
-	CHECK_NEAR(strong.threshold, -40.0f, 1e-4f);
-	CHECK_NEAR(strong.ratio, 6.5f, 1e-4f);
+	CHECK_NEAR(strong.threshold, -21.0f, 1e-4f);
+	CHECK_NEAR(strong.ratio, 4.0f, 1e-4f);
+
+	// Auto makeup keeps normal speech (-9 dBFS) where it was.
+	for (float sPct : {0.0f, 30.0f, 60.0f, 100.0f}) {
+		const auto tr = compressorFromStrength(sPct);
+		const float makeup = Compressor::autoMakeupDb(tr.threshold, tr.ratio, levels::kNormalPeakDb);
+		CHECK_NEAR(Compressor::computeGainDb(levels::kNormalPeakDb, tr.threshold, tr.ratio) + makeup, 0.0f,
+			   1e-5f);
+		CHECK(makeup >= 0.0f && makeup <= 10.0f);
+	}
 }
 
 void test_waveform_buckets()
@@ -701,8 +723,9 @@ void test_calibration_typical_voice()
 	CHECK(r.proposal.gateDb > r.stats.noiseDb);
 	CHECK(r.proposal.gateDb < r.stats.quietSpeechDb - 5.0f);
 	// Boost reaches the quieter line; cut reaches the louder line.
-	CHECK(r.proposal.maxGainDb >= -20.0f - r.stats.quietSpeechDb - 0.5f);
-	CHECK(r.proposal.maxCutDb >= r.stats.loudSpeechDb - (-20.0f));
+	CHECK(r.proposal.maxGainDb >= -20.0f - r.stats.quietSpeechPeakDb - 0.5f);
+	CHECK(r.proposal.maxCutDb >= r.stats.loudSpeechPeakDb - (-20.0f));
+	CHECK_NEAR(r.stats.speechPeakDb, r.stats.speechDb + 5.1f, 1.5f); // sample crest factor
 	CHECK(r.proposal.compStrength >= 10.0f && r.proposal.compStrength <= 85.0f);
 }
 
@@ -773,6 +796,94 @@ void test_engine_analysis_toggle()
 	CHECK(engine.analysis().read(out, 4) == 1);
 }
 
+// ---------------------------------------------------------------------------
+// Peak limiter (shared ceiling)
+// ---------------------------------------------------------------------------
+
+void test_limiter_transparent_below_ceiling()
+{
+	PeakLimiter lim;
+	lim.prepare(kRate, 1);
+	CHECK(lim.latencyFrames() == 72); // 1.5 ms at 48 kHz
+	Buffer buf(1, 1000);
+	std::uint64_t phase = 0;
+	buf.fillSine(0.7f, 440.0, kRate, phase); // -3.1 dBFS peak, under -1
+	const auto original = buf.planes;
+	auto b = buf.block();
+	lim.process(b);
+	bool exact = true;
+	for (std::uint32_t i = 72; i < 1000; ++i)
+		exact = exact && buf.planes[0][i] == original[0][i - 72];
+	CHECK(exact);
+	CHECK(lim.readGainReductionDb() == 0.0f);
+}
+
+void test_limiter_never_exceeds_ceiling()
+{
+	PeakLimiter lim;
+	lim.prepare(kRate, 2);
+	const float ceiling = dbToLinear(levels::kCeilingDb);
+	std::uint32_t seed = 12345;
+	auto rnd = [&seed] {
+		seed = seed * 1664525u + 1013904223u;
+		return static_cast<float>(seed >> 8) / static_cast<float>(1u << 24); // 0..1
+	};
+	float maxOut = 0.0f;
+	const std::uint32_t sizes[] = {1, 7, 64, 333, 480, 1024};
+	for (int round = 0; round < 300; ++round) {
+		const std::uint32_t n = sizes[round % 6];
+		Buffer buf(2, n);
+		// Speech-like noise with occasional shouts up to +12 dBFS
+		const float level = (round % 17 == 0) ? 4.0f : 0.3f + rnd();
+		for (std::uint32_t i = 0; i < n; ++i) {
+			buf.planes[0][i] = (rnd() * 2.0f - 1.0f) * level;
+			buf.planes[1][i] = (rnd() * 2.0f - 1.0f) * level * 0.5f;
+		}
+		auto b = buf.block();
+		lim.process(b);
+		for (const auto &plane : buf.planes)
+			for (float v : plane)
+				maxOut = std::max(maxOut, std::fabs(v));
+	}
+	CHECK(maxOut <= ceiling * 1.000001f);
+	CHECK(maxOut > ceiling * 0.9f); // it was actually limiting
+	CHECK(lim.readGainReductionDb() < -6.0f);
+}
+
+void test_limiter_recovers_after_burst()
+{
+	PeakLimiter lim;
+	lim.prepare(kRate, 1);
+	runSine(lim, 6.0f, 0.2, 480, 0.1, 1); // +9 dBFS peak: heavy limiting
+	lim.readGainReductionDb();
+	runSine(lim, -20.0f, 1.0, 480, 0.1, 1);
+	lim.readGainReductionDb();
+	const auto out = runSine(lim, -20.0f, 0.1, 480, 0.05, 1);
+	CHECK(lim.readGainReductionDb() > -0.01f); // back to unity (asymptotically)
+	CHECK_NEAR(out.rmsDb, -20.0f, 0.05f);
+}
+
+void test_chain_meets_obs_targets()
+{
+	// Default settings: a steady normal voice ends up reading about -9 dBFS on
+	// the OBS meter, and a shout 15 dB louder never exceeds -1 dBFS.
+	VoiceChain chain;
+	chain.engine.prepare(kRate, 2);
+	chain.leveler.setSettings({levels::kLevelerTargetDb, 12.0f, 12.0f, 1.0f, -50.0f});
+	chain.leveler.setEnabled(true);
+	const auto tr = compressorFromStrength(30.0f);
+	chain.compressor.setSettings({tr.threshold, tr.ratio, 10.0f, 150.0f,
+				      Compressor::autoMakeupDb(tr.threshold, tr.ratio, levels::kNormalPeakDb)});
+	chain.compressor.setEnabled(true);
+
+	const auto normal = runSine(chain.engine, -24.0f, 10.0);
+	CHECK_NEAR(normal.peakDb, levels::kLevelerTargetDb, 1.0f); // a sine has no dips between syllables
+	CHECK(normal.peakDb < levels::kCeilingDb - 3.0f);
+
+	const auto shout = runSine(chain.engine, -9.0f, 0.3, 480, 0.3); // +15 dB, before the leveler reacts
+	CHECK(shout.peakDb <= levels::kCeilingDb + 1e-4f);
+}
+
 } // namespace
 
 int main()
@@ -813,6 +924,10 @@ int main()
 		{"calibration_noisy_room", test_calibration_noisy_room},
 		{"calibration_problems_detected", test_calibration_problems_detected},
 		{"engine_analysis_toggle", test_engine_analysis_toggle},
+		{"limiter_transparent_below_ceiling", test_limiter_transparent_below_ceiling},
+		{"limiter_never_exceeds_ceiling", test_limiter_never_exceeds_ceiling},
+		{"limiter_recovers_after_burst", test_limiter_recovers_after_burst},
+		{"chain_meets_obs_targets", test_chain_meets_obs_targets},
 	};
 
 	for (const auto &[name, fn] : tests) {

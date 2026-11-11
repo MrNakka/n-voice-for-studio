@@ -1,6 +1,7 @@
 #include "waveform_widget.hpp"
 
 #include <nvoice/engine/db.hpp>
+#include <nvoice/engine/levels.hpp>
 
 #include <obs-module.h>
 
@@ -114,14 +115,15 @@ void WaveformWidget::paintEvent(QPaintEvent *)
 	const qreal cy = area.center().y();
 	const qreal half = area.height() / 2.0;
 
-	// Centre line and -20 dBFS guides
+	// Centre line and guides at OBS's zone lines (-20 / -9 dBFS)
 	p.setPen(QPen(grid_, 1.0));
 	p.drawLine(QPointF(area.left(), cy), QPointF(area.right(), cy));
-	QPen guide(grid_, 1.0, Qt::DotLine);
-	p.setPen(guide);
-	const qreal g = toFraction(engine::dbToLinear(-20.0f)) * half;
-	p.drawLine(QPointF(area.left(), cy - g), QPointF(area.right(), cy - g));
-	p.drawLine(QPointF(area.left(), cy + g), QPointF(area.right(), cy + g));
+	p.setPen(QPen(grid_, 1.0, Qt::DotLine));
+	for (float db : {engine::levels::kObsYellowDb, engine::levels::kObsRedDb}) {
+		const qreal g = toFraction(engine::dbToLinear(db)) * half;
+		p.drawLine(QPointF(area.left(), cy - g), QPointF(area.right(), cy - g));
+		p.drawLine(QPointF(area.left(), cy + g), QPointF(area.right(), cy + g));
+	}
 
 	if (history_) {
 		QColor in = input_;

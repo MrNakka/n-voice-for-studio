@@ -21,9 +21,10 @@ struct Palette {
 	QColor accentSoft;
 	QColor success;
 	QColor meterTrack;
-	QColor meterFillStart;
-	QColor meterFillEnd;
-	QColor meterHot; // above -6 dBFS
+	// OBS meter zones: below -20 / -20..-9 / above -9 dBFS
+	QColor meterGreen;
+	QColor meterYellow;
+	QColor meterRed;
 	QColor toggleOff;
 };
 

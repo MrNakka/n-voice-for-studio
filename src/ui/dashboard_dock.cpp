@@ -11,6 +11,8 @@
 #include "../obs/filter_registry.hpp"
 #include "../obs/filter_settings.hpp"
 
+#include <nvoice/engine/levels.hpp>
+
 #include <obs-module.h>
 #include <obs.hpp>
 #include <plugin-support.h>
@@ -186,7 +188,6 @@ void DashboardDock::buildPages()
 	comp.meterMaxDb = 0.0f;
 	comp.basic = {
 		{&p::kCompStrength, T("NVoice.Param.Strength"), T("NVoice.Param.Strength.Help"), 0, 1.0},
-		{&p::kCompMakeup, T("NVoice.Param.Makeup"), T("NVoice.Param.Makeup.Help"), 1, 0.5},
 	};
 	comp.advanced = {
 		{&p::kCompThreshold, T("NVoice.Param.Threshold"), T("NVoice.Param.Threshold.Help"), 1, 0.5},
@@ -208,7 +209,6 @@ void DashboardDock::buildPages()
 	lev.meterMinDb = -12.0f;
 	lev.meterMaxDb = 18.0f;
 	lev.basic = {
-		{&p::kLevelerTarget, T("NVoice.Param.Target"), T("NVoice.Param.Target.Help"), 1, 0.5},
 		{&p::kLevelerMaxGain, T("NVoice.Param.MaxGain"), T("NVoice.Param.MaxGain.Help"), 1, 0.5},
 		{&p::kLevelerSpeed, T("NVoice.Param.Speed"), T("NVoice.Param.Speed.Help"), 1, 0.1},
 	};
@@ -443,6 +443,10 @@ QWidget *DashboardDock::buildMicCard()
 	meterLayout->addLayout(outputRow);
 	outputMeter_ = new LevelMeterWidget(meterArea_);
 	meterLayout->addWidget(outputMeter_);
+	auto *meterHint = new QLabel(T("NVoice.Meter.Hint"), meterArea_);
+	meterHint->setObjectName(QStringLiteral("NVoiceHint"));
+	meterHint->setWordWrap(true);
+	meterLayout->addWidget(meterHint);
 
 	dashboardWave_ = new WaveformWidget(waveHistory_.get(), meterArea_);
 	meterLayout->addSpacing(4);
@@ -555,13 +559,13 @@ void DashboardDock::applyTheme(config::Theme theme)
 {
 	const Palette &p = paletteFor(theme);
 	setStyleSheet(styleSheetFor(theme));
-	meter_->setColors(p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
-	outputMeter_->setColors(p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
+	meter_->setColors(p.meterTrack, p.meterGreen, p.meterYellow, p.meterRed);
+	outputMeter_->setColors(p.meterTrack, p.meterGreen, p.meterYellow, p.meterRed);
 	for (auto *page : {compressorPage_, levelerPage_})
 		page->applyPalette(p.accent, p.toggleOff, p.meterTrack);
-	calibrationPage_->applyPalette(p.accent, p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
+	calibrationPage_->applyPalette(p.accent, p.meterTrack, p.meterGreen, p.meterYellow, p.meterRed);
 	for (auto *wave : {dashboardWave_, compressorWave_})
-		wave->setColors(p.border, p.textMuted, p.accent, p.meterHot, p.textMuted);
+		wave->setColors(p.border, p.textMuted, p.accent, p.meterRed, p.textMuted);
 	for (auto *row : rows_) {
 		if (row->toggle())
 			row->toggle()->setColors(p.accent, p.toggleOff, QColor(Qt::white));
@@ -719,12 +723,12 @@ void DashboardDock::tick()
 	auto &chain = selected_->chain;
 	const auto reading = chain.engine.inputMeter().read();
 	meter_->setLevels(reading.rmsDb, reading.peakDb);
-	levelValue_->setText(formatDb(reading.rmsDb));
+	levelValue_->setText(formatDb(meter_->displayDb()));
 	peakValue_->setText(formatDb(meter_->heldPeakDb()));
 
 	const auto output = chain.engine.outputMeter().read();
 	outputMeter_->setLevels(output.rmsDb, output.peakDb);
-	outputValue_->setText(formatDb(output.rmsDb));
+	outputValue_->setText(formatDb(outputMeter_->displayDb()));
 
 	pollWaveform();
 
@@ -875,8 +879,6 @@ void DashboardDock::writePresetValues(obs_data_t *d, config::Profile profile)
 	obs::setParam(d, p::kCompRatio, tr.ratio);
 	obs::setParam(d, p::kCompAttack, v.compAttackMs);
 	obs::setParam(d, p::kCompRelease, v.compReleaseMs);
-	obs::setParam(d, p::kCompMakeup, v.compMakeupDb);
-	obs::setParam(d, p::kLevelerTarget, v.levelerTargetDb);
 	obs::setParam(d, p::kLevelerMaxGain, v.levelerMaxGainDb);
 	obs::setParam(d, p::kLevelerMaxCut, v.levelerMaxCutDb);
 	obs::setParam(d, p::kLevelerSpeed, v.levelerSpeedSec);
@@ -1064,13 +1066,14 @@ void DashboardDock::finishCalibration()
 	OBSDataAutoRelease settings = obs_source_get_settings(filter);
 	namespace p = engine::params;
 	const CalibrationPage::Current current{
-		obs::getParam(settings, p::kLevelerTarget),  obs::getParam(settings, p::kLevelerGate),
-		obs::getParam(settings, p::kLevelerMaxGain), obs::getParam(settings, p::kLevelerMaxCut),
+		obs::getParam(settings, p::kLevelerGate),
+		obs::getParam(settings, p::kLevelerMaxGain),
+		obs::getParam(settings, p::kLevelerMaxCut),
 		obs::getParam(settings, p::kCompStrength),
 	};
 	// Start from the selected stream style, as the page says.
 	const auto &base = config::presetFor(settings_.profile);
-	calibResult_ = engine::analyzeVoice(calibFrames_, base.levelerTargetDb, base.compStrength);
+	calibResult_ = engine::analyzeVoice(calibFrames_, engine::levels::kNormalPeakDb, base.compStrength);
 	calibrationPage_->showResult(calibResult_, current);
 }
 
@@ -1085,7 +1088,6 @@ void DashboardDock::applyCalibration()
 	const auto tr = engine::compressorFromStrength(prop.compStrength);
 	writeFilter([&](obs_data_t *d) {
 		writePresetValues(d, settings_.profile);
-		obs::setParam(d, p::kLevelerTarget, prop.targetDb);
 		obs::setParam(d, p::kLevelerGate, prop.gateDb);
 		obs::setParam(d, p::kLevelerMaxGain, prop.maxGainDb);
 		obs::setParam(d, p::kLevelerMaxCut, prop.maxCutDb);

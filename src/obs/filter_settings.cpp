@@ -1,5 +1,7 @@
 #include "filter_settings.hpp"
 
+#include <nvoice/engine/levels.hpp>
+
 namespace nvoice::obs {
 
 namespace p = engine::params;
@@ -14,6 +16,22 @@ void setFilterDefaults(obs_data_t *settings)
 		obs_data_set_default_double(settings, spec->id.data(), spec->defaultValue);
 }
 
+void migrateFilterSettings(obs_data_t *settings)
+{
+	const long long version = obs_data_get_int(settings, kSettingsVersion);
+	if (version >= kCurrentSettingsVersion)
+		return;
+	if (version < 2) {
+		const auto tr = engine::compressorFromStrength(getParam(settings, p::kCompStrength));
+		setParam(settings, p::kCompThreshold, tr.threshold);
+		setParam(settings, p::kCompRatio, tr.ratio);
+		// No longer user settings: target is fixed, makeup is automatic.
+		obs_data_erase(settings, p::kLevelerTarget.id.data());
+		obs_data_erase(settings, p::kCompMakeup.id.data());
+	}
+	obs_data_set_int(settings, kSettingsVersion, kCurrentSettingsVersion);
+}
+
 float getParam(obs_data_t *settings, const engine::ParameterSpec &spec)
 {
 	return spec.clamp(static_cast<float>(obs_data_get_double(settings, spec.id.data())));
@@ -26,17 +44,19 @@ void setParam(obs_data_t *settings, const engine::ParameterSpec &spec, double va
 
 void applyFilterSettings(obs_data_t *settings, engine::VoiceChain &chain)
 {
+	const float threshold = getParam(settings, p::kCompThreshold);
+	const float ratio = getParam(settings, p::kCompRatio);
 	chain.compressor.setSettings({
-		getParam(settings, p::kCompThreshold),
-		getParam(settings, p::kCompRatio),
+		threshold,
+		ratio,
 		getParam(settings, p::kCompAttack),
 		getParam(settings, p::kCompRelease),
-		getParam(settings, p::kCompMakeup),
+		engine::Compressor::autoMakeupDb(threshold, ratio, engine::levels::kNormalPeakDb),
 	});
 	chain.compressor.setEnabled(obs_data_get_bool(settings, kCompressorEnabled));
 
 	chain.leveler.setSettings({
-		getParam(settings, p::kLevelerTarget),
+		engine::levels::kLevelerTargetDb,
 		getParam(settings, p::kLevelerMaxGain),
 		getParam(settings, p::kLevelerMaxCut),
 		getParam(settings, p::kLevelerSpeed),

@@ -1,5 +1,8 @@
 // N Voice for Studio - UI
-// Horizontal level bar: smoothed RMS fill plus a peak-hold marker.
+// Level bar that reads like OBS Studio's mixer meter, so both can be
+// compared side by side: sample peak, instant attack, 23.53 dB/s decay
+// (OBS default "Fast"), green / yellow / red zones at -20 / -9 dBFS, plus a
+// held peak marker.
 #pragma once
 
 #include <QColor>
@@ -17,14 +20,17 @@ public:
 
 	explicit LevelMeterWidget(QWidget *parent = nullptr);
 
-	// rmsDb / peakDb in dBFS (values <= -120 mean silence).
+	// peakDb: highest sample peak since the previous call (dBFS). rmsDb is
+	// accepted for API stability but the bar follows the peak, like OBS.
 	void setLevels(float rmsDb, float peakDb);
 	void clear();
 
+	// What the bar shows right now (OBS-style meter reading).
+	float displayDb() const { return displayDb_; }
 	// Peak held for display (holds ~1.5 s, then falls).
 	float heldPeakDb() const { return heldPeakDb_; }
 
-	void setColors(const QColor &track, const QColor &fillStart, const QColor &fillEnd, const QColor &hot);
+	void setColors(const QColor &track, const QColor &green, const QColor &yellow, const QColor &red);
 
 	QSize sizeHint() const override;
 	QSize minimumSizeHint() const override;
@@ -33,19 +39,17 @@ protected:
 	void paintEvent(QPaintEvent *event) override;
 
 private:
-	static constexpr float kHotDb = -6.0f;
-
 	float toFraction(float db) const;
 
-	float rmsDb_ = -120.0f;
+	float displayDb_ = -120.0f;
 	float heldPeakDb_ = -120.0f;
 	QElapsedTimer peakTimer_;
 	QElapsedTimer frameTimer_;
 
 	QColor track_{"#2A3142"};
-	QColor fillStart_{"#2FC7A0"};
-	QColor fillEnd_{"#4BE38C"};
-	QColor hot_{"#FF6B5E"};
+	QColor green_{"#3DDC84"};
+	QColor yellow_{"#F2C94C"};
+	QColor red_{"#FF5A52"};
 };
 
 } // namespace nvoice::ui

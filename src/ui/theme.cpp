@@ -16,9 +16,9 @@ const Palette kDark{
 	QColor("#1F3358"), // accentSoft
 	QColor("#3DDC84"), // success
 	QColor("#2A3142"), // meterTrack
-	QColor("#2FC7A0"), // meterFillStart
-	QColor("#4BE38C"), // meterFillEnd
-	QColor("#FF6B5E"), // meterHot
+	QColor("#3DDC84"), // meterGreen
+	QColor("#F2C94C"), // meterYellow
+	QColor("#FF5A52"), // meterRed
 	QColor("#3A4256"), // toggleOff
 };
 
@@ -34,9 +34,9 @@ const Palette kLight{
 	QColor("#FBE3EF"), // accentSoft
 	QColor("#22A55B"), // success
 	QColor("#ECE4F3"), // meterTrack
-	QColor("#B596F0"), // meterFillStart
-	QColor("#EC5FA3"), // meterFillEnd
-	QColor("#E5484D"), // meterHot
+	QColor("#2EAD62"), // meterGreen
+	QColor("#E0A100"), // meterYellow
+	QColor("#E5484D"), // meterRed
 	QColor("#D9CFE3"), // toggleOff
 };
 
@@ -107,7 +107,7 @@ QPushButton#NVoicePreset:checked {
 }
 #NVoiceChip[state="ok"] { background: @accentSoft; color: @success; }
 #NVoiceChip[state="idle"] { background: @surfaceAlt; color: @textMuted; }
-#NVoiceChip[state="off"] { background: @surfaceAlt; color: @meterHot; }
+#NVoiceChip[state="off"] { background: @surfaceAlt; color: @meterRed; }
 
 #NVoiceSourceCombo {
 	background: @surfaceAlt; color: @text; border: 1px solid @border;
@@ -179,9 +179,9 @@ QPushButton#NVoiceSecondary:disabled { color: @textMuted; }
 #NVoiceScriptLine[active="true"] { background: @accentSoft; border: 1px solid @accent; }
 #NVoiceScriptGuide { color: @textMuted; font-size: 11px; }
 #NVoiceScriptText { font-size: 15px; font-weight: 600; }
-#NVoiceRecording { color: @meterHot; font-weight: 600; }
+#NVoiceRecording { color: @meterRed; font-weight: 600; }
 #NVoiceMessage { border-radius: 8px; padding: 8px 10px; }
-#NVoiceMessage[kind="warn"] { background: @surfaceAlt; border: 1px solid @meterHot; }
+#NVoiceMessage[kind="warn"] { background: @surfaceAlt; border: 1px solid @meterRed; }
 #NVoiceMessage[kind="info"] { background: @surfaceAlt; border: 1px solid @border; }
 #NVoiceMessage[kind="note"] { color: @textMuted; font-size: 11px; padding: 0 2px; }
 
@@ -194,7 +194,7 @@ QPushButton#NVoiceSecondary:disabled { color: @textMuted; }
 		{"@background", p.background}, {"@surfaceAlt", p.surfaceAlt}, {"@surface", p.surface},
 		{"@border", p.border},         {"@textMuted", p.textMuted},   {"@text", p.text},
 		{"@accentSoft", p.accentSoft}, {"@accent", p.accent},         {"@success", p.success},
-		{"@meterHot", p.meterHot},
+		{"@meterRed", p.meterRed},
 	};
 	// Longer tokens first (e.g. @surfaceAlt before @surface) — order above matters.
 	for (const auto &[token, color] : tokens)

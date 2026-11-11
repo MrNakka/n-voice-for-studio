@@ -39,6 +39,7 @@ void *filterCreate(obs_data_t *settings, obs_source_t *source)
 		channels > engine::kMaxChannels ? engine::kMaxChannels : (channels == 0 ? 1 : channels));
 
 	instance->shared->chain.engine.prepare(sampleRate, instance->numChannels);
+	migrateFilterSettings(settings);
 	applyFilterSettings(settings, instance->shared->chain);
 	instance->registryId = FilterRegistry::instance().add(source, instance->shared);
 

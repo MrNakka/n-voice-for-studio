@@ -280,7 +280,7 @@ void CalibrationPage::showResult(const engine::CalibrationResult &r, const Curre
 	grid->addWidget(mTitle, 0, 0, 1, 2);
 	const auto &s = r.stats;
 	const std::pair<const char *, QString> rows[] = {
-		{"NVoice.Calib.M.Speech", db(s.speechDb) + QStringLiteral("FS")},
+		{"NVoice.Calib.M.Speech", db(s.speechPeakDb) + QStringLiteral("FS")},
 		{"NVoice.Calib.M.Noise", db(s.noiseDb) + QStringLiteral("FS")},
 		{"NVoice.Calib.M.Range", db(s.loudSpeechDb - s.quietSpeechDb)},
 		{"NVoice.Calib.M.Time", T("NVoice.Calib.Seconds").arg(static_cast<double>(s.speechSeconds), 0, 'f', 1)},
@@ -329,7 +329,6 @@ void CalibrationPage::showResult(const engine::CalibrationResult &r, const Curre
 		return std::fabs(a - b) >= 0.5f;
 	};
 	const Change changes[] = {
-		{"NVoice.Param.Target", db(current.targetDb), db(p.targetDb), differs(current.targetDb, p.targetDb)},
 		{"NVoice.Param.Gate", db(current.gateDb), db(p.gateDb), differs(current.gateDb, p.gateDb)},
 		{"NVoice.Param.MaxGain", db(current.maxGainDb), db(p.maxGainDb),
 		 differs(current.maxGainDb, p.maxGainDb)},
@@ -359,11 +358,11 @@ void CalibrationPage::showResult(const engine::CalibrationResult &r, const Curre
 	addMessage(T("NVoice.Calib.Note"), "note");
 }
 
-void CalibrationPage::applyPalette(const QColor &accent, const QColor &track, const QColor &fillStart,
-				   const QColor &fillEnd, const QColor &hot)
+void CalibrationPage::applyPalette(const QColor &accent, const QColor &track, const QColor &green, const QColor &yellow,
+				   const QColor &red)
 {
 	progress_->setColors(track, accent);
-	meter_->setColors(track, fillStart, fillEnd, hot);
+	meter_->setColors(track, green, yellow, red);
 }
 
 } // namespace nvoice::ui

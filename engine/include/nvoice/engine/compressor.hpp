@@ -37,6 +37,13 @@ public:
 	// Static gain computer: gain change in dB (<= 0) for an input level.
 	static float computeGainDb(float inputDb, float thresholdDb, float ratio) noexcept;
 
+	// Makeup that leaves `referenceDb` (normal speech) where it was, so the
+	// compressor only reshapes what is louder or quieter than normal.
+	static float autoMakeupDb(float thresholdDb, float ratio, float referenceDb) noexcept
+	{
+		return -computeGainDb(referenceDb, thresholdDb, ratio);
+	}
+
 	void prepare(double sampleRate, std::uint32_t numChannels) override;
 	void reset() noexcept override;
 	void process(AudioBlock &block) noexcept override;
