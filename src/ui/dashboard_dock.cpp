@@ -5,6 +5,7 @@
 #include "level_meter_widget.hpp"
 #include "theme.hpp"
 #include "toggle_switch.hpp"
+#include "waveform_widget.hpp"
 #include "../config/presets.hpp"
 #include "../obs/filter_registry.hpp"
 #include "../obs/filter_settings.hpp"
@@ -26,6 +27,8 @@
 #include <QStyle>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <optional>
 #include <vector>
 
 namespace nvoice::ui {
@@ -73,8 +76,10 @@ DashboardDock::DashboardDock(QWidget *parent) : QFrame(parent)
 	setAttribute(Qt::WA_StyledBackground, true);
 
 	settings_ = store_.load();
+	waveHistory_ = std::make_unique<WaveHistory>();
 	buildUi();
 	applyTheme(settings_.theme);
+	setWaveformVisible(settings_.waveformVisible);
 
 	clock_.start();
 	refreshSources();
@@ -90,6 +95,8 @@ DashboardDock::~DashboardDock()
 void DashboardDock::shutdown()
 {
 	timer_.stop();
+	if (selected_)
+		selected_->chain.engine.setWaveformEnabled(false);
 	selected_.reset();
 	selectedFilter_ = nullptr;
 }
@@ -185,6 +192,9 @@ void DashboardDock::buildPages()
 		{&p::kCompRelease, T("NVoice.Param.Release"), T("NVoice.Param.Release.Help"), 0, 5.0},
 	};
 	compressorPage_ = new FeaturePage(comp, stack_);
+	compressorWave_ = new WaveformWidget(waveHistory_.get());
+	compressorWave_->setToolTip(T("NVoice.Wave.Threshold.Help"));
+	compressorPage_->setExtraWidget(compressorWave_);
 	pageHost(compressorPage_);
 
 	FeaturePage::Spec lev;
@@ -411,6 +421,10 @@ QWidget *DashboardDock::buildMicCard()
 	meterLayout->addLayout(outputRow);
 	outputMeter_ = new LevelMeterWidget(meterArea_);
 	meterLayout->addWidget(outputMeter_);
+
+	dashboardWave_ = new WaveformWidget(waveHistory_.get(), meterArea_);
+	meterLayout->addSpacing(4);
+	meterLayout->addWidget(dashboardWave_);
 	cardLayout->addWidget(meterArea_);
 
 	noSourceHint_ = new QLabel(T("NVoice.Input.NoSource"), card);
@@ -462,7 +476,7 @@ QWidget *DashboardDock::buildFeatureList()
 		{"balance", QStringLiteral("▥"), T("NVoice.Feature.Balance.Title"), T("NVoice.Feature.Balance.Desc"),
 		 false, false},
 		{"waveform", QStringLiteral("∿"), T("NVoice.Feature.Waveform.Title"), T("NVoice.Feature.Waveform.Desc"),
-		 false, true},
+		 true, true, false},
 	};
 	for (const auto &spec : extraSpecs) {
 		auto *card = new QFrame(section);
@@ -483,6 +497,7 @@ QWidget *DashboardDock::buildFeatureList()
 			if (id == QLatin1String("waveform")) {
 				settings_.waveformVisible = on;
 				persist();
+				setWaveformVisible(on);
 			} else {
 				onFeatureToggled(id, on);
 			}
@@ -522,6 +537,8 @@ void DashboardDock::applyTheme(config::Theme theme)
 	outputMeter_->setColors(p.meterTrack, p.meterFillStart, p.meterFillEnd, p.meterHot);
 	for (auto *page : {compressorPage_, levelerPage_})
 		page->applyPalette(p.accent, p.toggleOff, p.meterTrack);
+	for (auto *wave : {dashboardWave_, compressorWave_})
+		wave->setColors(p.border, p.textMuted, p.accent, p.meterHot, p.textMuted);
 	for (auto *row : rows_) {
 		if (row->toggle())
 			row->toggle()->setColors(p.accent, p.toggleOff, QColor(Qt::white));
@@ -548,6 +565,8 @@ void DashboardDock::setStatus(bool active)
 void DashboardDock::showNoSource()
 {
 	selectedId_ = 0;
+	if (selected_)
+		selected_->chain.engine.setWaveformEnabled(false);
 	selected_.reset();
 	selectedFilter_ = nullptr;
 	selectedEnabled_ = false;
@@ -620,6 +639,9 @@ void DashboardDock::refreshSources()
 	if (selectionChanged) {
 		meter_->clear();
 		outputMeter_->clear();
+		if (selected_)
+			selected_->chain.engine.setWaveformEnabled(false);
+		waveHistory_->clear();
 	}
 	selectedId_ = chosen->id;
 	selected_ = chosen->shared;
@@ -652,8 +674,10 @@ void DashboardDock::refreshSources()
 		row->setInteractive(true);
 	for (auto *page : {compressorPage_, levelerPage_})
 		page->setControlsEnabled(true);
-	if (selectionChanged)
+	if (selectionChanged) {
 		syncFromFilter();
+		setWaveformVisible(settings_.waveformVisible);
+	}
 }
 
 void DashboardDock::tick()
@@ -674,6 +698,8 @@ void DashboardDock::tick()
 	const auto output = chain.engine.outputMeter().read();
 	outputMeter_->setLevels(output.rmsDb, output.peakDb);
 	outputValue_->setText(formatDb(output.rmsDb));
+
+	pollWaveform();
 
 	// Only the visible page reads its meter (reading resets the peak hold).
 	if (stack_->currentWidget()->isAncestorOf(compressorPage_))
@@ -864,6 +890,70 @@ void DashboardDock::showDashboard()
 {
 	stack_->setCurrentIndex(0);
 	syncFromFilter();
+}
+
+// ---------------------------------------------------------------------------
+// Waveform
+// ---------------------------------------------------------------------------
+
+void DashboardDock::setWaveformVisible(bool visible)
+{
+	for (auto *row : rows_) {
+		if (row->featureId() == QLatin1String("waveform"))
+			row->setChecked(visible);
+	}
+	dashboardWave_->setVisible(visible);
+	compressorWave_->parentWidget()->setVisible(visible);
+
+	if (!selected_)
+		return;
+	auto &engine = selected_->chain.engine;
+	if (visible && !engine.waveformEnabled()) {
+		// Drop buckets left from an earlier session, then start capturing.
+		engine::WaveBucket discard[256];
+		while (engine.inputWaveform().read(discard, 256) > 0) {
+		}
+		while (engine.outputWaveform().read(discard, 256) > 0) {
+		}
+		waveHistory_->clear();
+	}
+	engine.setWaveformEnabled(visible);
+}
+
+void DashboardDock::pollWaveform()
+{
+	if (!selected_ || !settings_.waveformVisible)
+		return;
+	auto &chain = selected_->chain;
+
+	engine::WaveBucket in[64];
+	engine::WaveBucket out[64];
+	std::size_t total = 0;
+	for (;;) {
+		const std::size_t nIn = chain.engine.inputWaveform().read(in, 64);
+		const std::size_t nOut = chain.engine.outputWaveform().read(out, nIn);
+		const std::size_t n = std::min(nIn, nOut); // equal: both are pushed in the same callback
+		waveHistory_->append(in, out, n);
+		total += n;
+		if (nIn < 64)
+			break;
+	}
+
+	// The compressor sees the input after the auto leveler, so its threshold
+	// relative to the input moves with the leveler's current gain.
+	std::optional<float> threshold;
+	if (chain.compressor.enabled()) {
+		const float lift = chain.leveler.enabled() ? chain.leveler.currentGainDb() : 0.0f;
+		threshold = chain.compressor.settings().thresholdDb - lift;
+	}
+	compressorWave_->setThresholdDb(threshold);
+
+	if (total > 0) {
+		if (dashboardWave_->isVisible())
+			dashboardWave_->update();
+		if (compressorWave_->isVisible())
+			compressorWave_->update();
+	}
 }
 
 } // namespace nvoice::ui

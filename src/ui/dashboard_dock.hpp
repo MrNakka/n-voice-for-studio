@@ -33,6 +33,8 @@ namespace nvoice::ui {
 class FeaturePage;
 class FeatureRow;
 class LevelMeterWidget;
+class WaveHistory;
+class WaveformWidget;
 
 class DashboardDock : public QFrame {
 	Q_OBJECT
@@ -77,6 +79,8 @@ private:
 	void undoPreset();
 	void openPage(const QString &featureId);
 	void showDashboard();
+	void setWaveformVisible(bool visible);
+	void pollWaveform();
 
 	config::SettingsStore store_;
 	config::AppSettings settings_;
@@ -115,6 +119,12 @@ private:
 	LevelMeterWidget *meter_ = nullptr;
 	QLabel *outputValue_ = nullptr;
 	LevelMeterWidget *outputMeter_ = nullptr;
+
+	// Waveform (requirements §4.7): one history, shown on the dashboard and
+	// on the compressor page.
+	std::unique_ptr<WaveHistory> waveHistory_;
+	WaveformWidget *dashboardWave_ = nullptr;
+	WaveformWidget *compressorWave_ = nullptr;
 
 	// Features
 	QVector<FeatureRow *> rows_;

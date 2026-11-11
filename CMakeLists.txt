@@ -71,6 +71,8 @@ target_sources(
     src/ui/theme.hpp
     src/ui/toggle_switch.cpp
     src/ui/toggle_switch.hpp
+    src/ui/waveform_widget.cpp
+    src/ui/waveform_widget.hpp
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

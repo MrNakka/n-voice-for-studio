@@ -8,6 +8,7 @@
 #include "nvoice/engine/parameters.hpp"
 #include "nvoice/engine/spsc_ring_buffer.hpp"
 #include "nvoice/engine/voice_chain.hpp"
+#include "nvoice/engine/waveform_capture.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -548,6 +549,100 @@ void test_strength_mapping()
 	CHECK_NEAR(strong.ratio, 6.5f, 1e-4f);
 }
 
+void test_waveform_buckets()
+{
+	WaveformCapture wave;
+	wave.prepare(kRate); // 10 ms = 480 frames
+	CHECK(wave.bucketFrames() == 480);
+
+	// 700 frames: one full bucket now, 220 carried into the next block.
+	std::vector<float> a(700, 0.0f);
+	a[10] = 0.5f;
+	a[20] = -0.25f;
+	a[600] = 0.9f; // lands in the second bucket
+	float *pa[1] = {a.data()};
+	wave.process({pa, 1, 700});
+
+	WaveBucket out[4];
+	CHECK(wave.read(out, 4) == 1);
+	CHECK(out[0].max == 0.5f && out[0].min == -0.25f);
+
+	std::vector<float> b(260, 0.0f); // completes bucket 2 (220 + 260 = 480)
+	b[5] = -0.7f;
+	float *pb[1] = {b.data()};
+	wave.process({pb, 1, 260});
+	CHECK(wave.read(out, 4) == 1);
+	CHECK(out[0].max == 0.9f && out[0].min == -0.7f);
+	CHECK(wave.read(out, 4) == 0);
+}
+
+void test_waveform_across_channels_and_null_planes()
+{
+	WaveformCapture wave;
+	wave.prepare(kRate);
+	std::vector<float> l(480, 0.1f), r(480, -0.3f);
+	float *planes[3] = {l.data(), nullptr, r.data()};
+	wave.process({planes, 3, 480});
+	WaveBucket out;
+	CHECK(wave.read(&out, 1) == 1);
+	CHECK(out.min == -0.3f && out.max == 0.1f);
+}
+
+void test_engine_waveform_toggle_and_alignment()
+{
+	GainStage half(0.5f);
+	AudioEngine engine;
+	engine.addStage(&half);
+	engine.prepare(kRate, 1);
+
+	Buffer buf(1, 240); // half a bucket per block
+	for (auto &v : buf.planes[0])
+		v = 0.8f;
+
+	// Off by default: nothing captured.
+	auto block = buf.block();
+	engine.process(block);
+	WaveBucket in[8], out[8];
+	CHECK(engine.inputWaveform().read(in, 8) == 0);
+
+	// On: input and output buckets arrive together and reflect the stage.
+	engine.setWaveformEnabled(true);
+	for (int i = 0; i < 6; ++i) {
+		for (auto &v : buf.planes[0])
+			v = 0.8f;
+		auto b = buf.block();
+		engine.process(b);
+	}
+	const auto nIn = engine.inputWaveform().read(in, 8);
+	const auto nOut = engine.outputWaveform().read(out, 8);
+	CHECK(nIn == 3 && nOut == 3);
+	CHECK_NEAR(in[0].max, 0.8f, 1e-6f);
+	CHECK_NEAR(out[0].max, 0.4f, 1e-6f);
+
+	// Turning it back on drops the stale partial bucket: still aligned.
+	engine.setWaveformEnabled(false);
+	auto c = buf.block();
+	engine.process(c); // half a bucket would be pending if capture ran
+	engine.setWaveformEnabled(true);
+	for (int i = 0; i < 2; ++i) {
+		auto d = buf.block();
+		engine.process(d);
+	}
+	CHECK(engine.inputWaveform().read(in, 8) == 1);
+	CHECK(engine.outputWaveform().read(out, 8) == 1);
+}
+
+void test_waveform_full_ring_drops_without_blocking()
+{
+	WaveformCapture wave(4);
+	wave.prepare(kRate);
+	std::vector<float> a(480 * 10, 0.2f);
+	float *p[1] = {a.data()};
+	wave.process({p, 1, static_cast<std::uint32_t>(a.size())});
+	WaveBucket out[16];
+	CHECK(wave.read(out, 16) == 4);
+}
+
 } // namespace
 
 int main()
@@ -577,6 +672,10 @@ int main()
 		 test_leveler_disabled_is_bit_exact_and_reenable_resets},
 		{"voice_chain_order_and_bypass", test_voice_chain_order_and_bypass},
 		{"strength_mapping", test_strength_mapping},
+		{"waveform_buckets", test_waveform_buckets},
+		{"waveform_across_channels_and_null_planes", test_waveform_across_channels_and_null_planes},
+		{"engine_waveform_toggle_and_alignment", test_engine_waveform_toggle_and_alignment},
+		{"waveform_full_ring_drops_without_blocking", test_waveform_full_ring_drops_without_blocking},
 	};
 
 	for (const auto &[name, fn] : tests) {

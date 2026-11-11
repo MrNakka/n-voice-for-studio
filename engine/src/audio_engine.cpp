@@ -9,6 +9,8 @@ void AudioEngine::prepare(double sampleRate, std::uint32_t numChannels)
 
 	inputMeter_.prepare(sampleRate_);
 	outputMeter_.prepare(sampleRate_);
+	inputWave_.prepare(sampleRate_);
+	outputWave_.prepare(sampleRate_);
 
 	for (std::size_t i = 0; i < stageCount_; ++i)
 		stages_[i]->prepare(sampleRate_, numChannels_);
@@ -35,12 +37,23 @@ void AudioEngine::process(AudioBlock &block) noexcept
 	if (block.channels == nullptr || block.numFrames == 0)
 		return;
 
+	const bool wave = waveformEnabled_.load(std::memory_order_relaxed);
+	if (wave && !waveformWasEnabled_) {
+		inputWave_.restart();
+		outputWave_.restart();
+	}
+	waveformWasEnabled_ = wave;
+
 	inputMeter_.process(block);
+	if (wave)
+		inputWave_.process(block);
 
 	for (std::size_t i = 0; i < stageCount_; ++i)
 		stages_[i]->process(block);
 
 	outputMeter_.process(block);
+	if (wave)
+		outputWave_.process(block);
 }
 
 } // namespace nvoice::engine

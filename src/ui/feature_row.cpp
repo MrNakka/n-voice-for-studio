@@ -52,9 +52,11 @@ FeatureRow::FeatureRow(const Spec &spec, QWidget *parent) : QFrame(parent), spec
 		connect(toggle_, &ToggleSwitch::toggled, this, [this](bool on) { emit toggled(spec_.id, on); });
 	}
 
-	auto *chevron = new QLabel(QStringLiteral("›"), this);
-	chevron->setObjectName(QStringLiteral("NVoiceChevron"));
-	layout->addWidget(chevron, 0, Qt::AlignVCenter);
+	if (spec.navigable) {
+		auto *chevron = new QLabel(QStringLiteral("›"), this);
+		chevron->setObjectName(QStringLiteral("NVoiceChevron"));
+		layout->addWidget(chevron, 0, Qt::AlignVCenter);
+	}
 }
 
 void FeatureRow::setSubtitle(const QString &text)
@@ -92,8 +94,12 @@ void FeatureRow::setLast(bool last)
 void FeatureRow::mouseReleaseEvent(QMouseEvent *event)
 {
 	// Coming Soon rows are inert: no toggling, no navigation.
-	if (spec_.available && interactive_ && event->button() == Qt::LeftButton)
-		emit openRequested(spec_.id);
+	if (spec_.available && interactive_ && event->button() == Qt::LeftButton) {
+		if (spec_.navigable)
+			emit openRequested(spec_.id);
+		else if (toggle_)
+			toggle_->click(); // emits toggled() like a direct click
+	}
 	QFrame::mouseReleaseEvent(event);
 }
 

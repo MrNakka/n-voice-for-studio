@@ -65,6 +65,9 @@ public:
 
 	void applyPalette(const QColor &accent, const QColor &toggleOff, const QColor &track);
 
+	// Shows `widget` right below the live meter (e.g. the waveform).
+	void setExtraWidget(QWidget *widget);
+
 	const QVector<ParamControl *> &controls() const { return controls_; }
 
 signals:
@@ -80,6 +83,7 @@ private:
 	QLabel *meterValue_ = nullptr;
 	GainBar *meterBar_ = nullptr;
 	QWidget *advancedArea_ = nullptr;
+	QFrame *extraCard_ = nullptr;
 	QToolButton *advancedButton_ = nullptr;
 };
 

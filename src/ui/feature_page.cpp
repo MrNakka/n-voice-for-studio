@@ -129,6 +129,13 @@ FeaturePage::FeaturePage(const Spec &spec, QWidget *parent) : QFrame(parent), sp
 	meterLayout->addWidget(meterBar_);
 	layout->addWidget(meterCard);
 
+	extraCard_ = new QFrame(this);
+	extraCard_->setObjectName(QStringLiteral("NVoiceCard"));
+	auto *extraLayout = new QVBoxLayout(extraCard_);
+	extraLayout->setContentsMargins(12, 8, 12, 8);
+	extraCard_->setVisible(false);
+	layout->addWidget(extraCard_);
+
 	auto addControls = [this](const QVector<ParamControl::Spec> &specs, QVBoxLayout *target, QWidget *owner) {
 		for (const auto &s : specs) {
 			auto *control = new ParamControl(s, owner);
@@ -211,6 +218,13 @@ void FeaturePage::setControlsEnabled(bool enabled)
 	for (auto *control : controls_)
 		control->setEnabled(enabled);
 	toggle_->setEnabled(enabled);
+}
+
+void FeaturePage::setExtraWidget(QWidget *widget)
+{
+	widget->setParent(extraCard_);
+	extraCard_->layout()->addWidget(widget);
+	extraCard_->setVisible(true);
 }
 
 void FeaturePage::applyPalette(const QColor &accent, const QColor &toggleOff, const QColor &track)

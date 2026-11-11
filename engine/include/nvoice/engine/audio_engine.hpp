@@ -8,8 +8,10 @@
 #include "audio_block.hpp"
 #include "level_meter.hpp"
 #include "processor.hpp"
+#include "waveform_capture.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 
 namespace nvoice::engine {
@@ -32,6 +34,14 @@ public:
 	LevelMeter &inputMeter() noexcept { return inputMeter_; }
 	LevelMeter &outputMeter() noexcept { return outputMeter_; }
 
+	// Waveform capture of the input and the processed output. One switch for
+	// both so their buckets always line up. Off by default (requirements
+	// §4.7); metering and processing run either way.
+	void setWaveformEnabled(bool enabled) noexcept { waveformEnabled_.store(enabled, std::memory_order_relaxed); }
+	bool waveformEnabled() const noexcept { return waveformEnabled_.load(std::memory_order_relaxed); }
+	WaveformCapture &inputWaveform() noexcept { return inputWave_; }
+	WaveformCapture &outputWaveform() noexcept { return outputWave_; }
+
 	double sampleRate() const noexcept { return sampleRate_; }
 	std::uint32_t numChannels() const noexcept { return numChannels_; }
 	std::size_t stageCount() const noexcept { return stageCount_; }
@@ -45,6 +55,11 @@ private:
 
 	LevelMeter inputMeter_;
 	LevelMeter outputMeter_;
+
+	WaveformCapture inputWave_;
+	WaveformCapture outputWave_;
+	std::atomic<bool> waveformEnabled_{false};
+	bool waveformWasEnabled_ = false; // audio thread
 };
 
 } // namespace nvoice::engine

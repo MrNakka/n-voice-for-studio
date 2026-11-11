@@ -23,6 +23,7 @@ public:
 		QString subtitle;
 		bool available = false; // false -> Coming Soon
 		bool hasToggle = true;  // false -> navigation-only row
+		bool navigable = true;  // false -> no detail page; clicking toggles
 	};
 
 	explicit FeatureRow(const Spec &spec, QWidget *parent = nullptr);
