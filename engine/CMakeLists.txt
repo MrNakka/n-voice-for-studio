@@ -15,23 +15,8 @@ option(NVOICE_BUILD_TESTS "Build N Voice engine unit tests" ${NVOICE_ENGINE_STAN
 add_library(nvoice_engine STATIC)
 add_library(NVoice::engine ALIAS nvoice_engine)
 
-target_sources(
-  nvoice_engine
-  PRIVATE
-    src/audio_engine.cpp
-    src/level_meter.cpp
-  PUBLIC
-    FILE_SET HEADERS
-    BASE_DIRS include
-    FILES
-      include/nvoice/engine/audio_block.hpp
-      include/nvoice/engine/audio_engine.hpp
-      include/nvoice/engine/db.hpp
-      include/nvoice/engine/level_meter.hpp
-      include/nvoice/engine/parameters.hpp
-      include/nvoice/engine/processor.hpp
-      include/nvoice/engine/spsc_ring_buffer.hpp
-)
+target_sources(nvoice_engine PRIVATE src/audio_engine.cpp src/level_meter.cpp)
+target_include_directories(nvoice_engine PUBLIC include)
 
 target_compile_features(nvoice_engine PUBLIC cxx_std_20)
 set_target_properties(nvoice_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)

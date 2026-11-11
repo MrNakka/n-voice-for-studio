@@ -91,6 +91,20 @@ C:\ProgramData\obs-studio\plugins\n-voice-for-studio\
 
 設定ファイルの場所：`%APPDATA%\obs-studio\plugin_config\n-voice-for-studio\settings.json`
 
+## GitHubでの自動ビルド（GitHub Actions）
+
+`.github/` にワークフローが入っています。GitHubへpushすると自動で実行されます。
+
+| タイミング | 実行される内容 |
+|---|---|
+| `main` へのpush | 整形チェック → エンジン単体テスト（Ubuntu／Windows MSVC）→ Windows版ビルド |
+| Pull Request | 上と同じ（Pull Requestでは配布用zipは作りません） |
+| `0.1.0` のようなタグをpush | 上に加えて、Windows版zipを添付したReleaseの下書きを作成 |
+
+ビルドしたプラグインは、GitHubの「Actions」タブ → 実行結果 → 「Artifacts」から `n-voice-for-studio-<版>-windows-x64-<コミット>` をダウンロードできます。
+
+整形ルール：C++は clang-format 19.1.1、CMakeは gersemi です（どちらも設定ファイル同梱）。整形チェックで落ちたら、エラーに出ているファイルを整形してから再度pushしてください。
+
 ## 音声エンジンの単体テスト
 
 エンジンはOBSなしで単独ビルドできます。

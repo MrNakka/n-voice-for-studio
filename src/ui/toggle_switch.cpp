@@ -33,7 +33,7 @@ void ToggleSwitch::paintEvent(QPaintEvent *)
 	const qreal radius = track.height() / 2.0;
 	QColor trackColor = isChecked() ? on_ : off_;
 	if (!isEnabled())
-		trackColor.setAlphaF(0.4);
+		trackColor.setAlphaF(0.4f);
 
 	p.setPen(Qt::NoPen);
 	p.setBrush(trackColor);
